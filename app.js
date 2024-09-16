@@ -71,9 +71,9 @@ app.post('/generate-dkim', async (req, res) => {
     console.log('DKIM Signature generated successfully');
     console.log('Signed output:', signedOutput);
 
-    const dkimSignatureMatch = signedOutput.match(/dkim-signature:.+/i);
+    const dkimSignatureMatch = signedOutput.match(/DKIM-Signature:[\s\S]+?(?=\r\n\S)/i);
     if (dkimSignatureMatch) {
-      const dkimSignature = dkimSignatureMatch[0];
+      const dkimSignature = dkimSignatureMatch[0].trim();
       console.log('Extracted DKIM Signature:', dkimSignature);
       res.json({ dkimSignature });
     } else {
