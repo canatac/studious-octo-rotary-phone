@@ -18,7 +18,7 @@ const transporter = nodemailer.createTransport({
     newline: 'unix'
   });
 
-app.post('/generate-dkim', (req, res) => {
+app.post('/generate-dkim', async (req, res) => {
   const { from, to, subject, text } = req.body;
 
   const mailOptions = {
@@ -34,7 +34,7 @@ app.post('/generate-dkim', (req, res) => {
   };
 
   try {
-    const info = transporter.sendMail(mailOptions);
+    const info = await transporter.sendMail(mailOptions);
     const rawEmail = info.message.toString();
     const dkimSignature = rawEmail.match(/dkim-signature:.+/i)[0];
     res.json({ dkimSignature });
