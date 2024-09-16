@@ -17,6 +17,9 @@ console.log('Private key loaded from:', privateKeyPath);
 console.log('Private key (first 50 chars):', privateKey.substring(0, 50) + '...');
 
 app.post('/generate-dkim', async (req, res) => {
+
+    console.log('Received request:', JSON.stringify(req.body, null, 2));
+
   const { from, to, subject, text } = req.body;
 
   const headers = {
@@ -37,24 +40,51 @@ app.post('/generate-dkim', async (req, res) => {
     console.log('Domain Name:', process.env.DOMAIN_NAME);
     console.log('Key Selector:', process.env.KEY_SELECTOR);
 
-    const dkimSignature = dkimSign({
-      domainName: process.env.DOMAIN_NAME,
-      keySelector: process.env.KEY_SELECTOR,
-      privateKey: privateKey,
-      headerFieldNames: 'from:to:subject:content-type',
-      headers,
-      body,
-    });
+    const dkim = new DKIM({
+        domainName: process.env.DOMAIN_NAME,
+        keySelector: process.env.KEY_SELECTOR,
+        privateKey: privateKey,
+        headerFieldNames: 'from:to:subject:content-type'
+      });
+      console.log('DKIM instance created');
+
+      const rawEmail = Object.entries(headers).map(([key, value]) => `${key}: ${value}`).join('\r\n') + '\r\n\r\n' + body;
+      console.log('Raw email constructed:', rawEmail);
+
+      console.log('Starting DKIM signing process...');
+      const signedOutput = await new Promise((resolve, reject) => {
+        let chunks = [];
+        dkim.sign(rawEmail)
+        .on('data', chunk => {
+          console.log('Received chunk:', chunk.toString());
+          chunks.push(chunk);
+        })
+        .on('end', () => {
+          console.log('DKIM signing process completed');
+          resolve(Buffer.concat(chunks).toString('utf8'));
+        })
+        .on('error', error => {
+          console.error('Error during DKIM signing:', error);
+          reject(error);
+        });
+      });
 
     console.log('DKIM Signature generated successfully');
     console.log('DKIM Signature:', dkimSignature);
 
-    
-    res.json({ dkimSignature });
-  } catch (error) {
-    console.error('Error:', error);
-    res.status(500).json({ error: error.message });
-  }
+    const dkimSignatureMatch = signedOutput.match(/dkim-signature:.+/i);
+    if (dkimSignatureMatch) {
+      const dkimSignature = dkimSignatureMatch[0];
+      console.log('Extracted DKIM Signature:', dkimSignature);
+      res.json({ dkimSignature });
+    } else {
+      console.error('DKIM Signature not found in signed output');
+      res.status(500).json({ error: 'DKIM Signature not found in signed output' });
+    }
+    } catch (error) {
+        console.error('Error generating DKIM signature:', error);
+        res.status(500).json({ error: error.message });
+    }
 });
 
 const PORT = process.env.PORT || 3000;
