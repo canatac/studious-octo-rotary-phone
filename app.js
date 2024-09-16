@@ -36,9 +36,17 @@ app.post('/generate-dkim', async (req, res) => {
   try {
     const info = await transporter.sendMail(mailOptions);
     const rawEmail = info.message.toString();
-    const dkimSignature = rawEmail.match(/dkim-signature:.+/i)[0];
-    res.json({ dkimSignature });
+    const dkimSignatureMatch = rawEmail.match(/dkim-signature:.+/i);
+    
+    if (dkimSignatureMatch) {
+      const dkimSignature = dkimSignatureMatch[0];
+      res.json({ dkimSignature });
+    } else {
+      console.log('Raw email content:', rawEmail);
+      res.status(500).json({ error: 'DKIM signature not found in the generated email' });
+    }
   } catch (error) {
+    console.error('Error:', error);
     res.status(500).json({ error: error.message });
   }
 });
