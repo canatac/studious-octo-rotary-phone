@@ -2,8 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
-const nodemailer = require('nodemailer');
-const dkimSign = require('nodemailer/lib/dkim');
+const DKIM = require('nodemailer/lib/dkim');
 
 const app = express();
 app.use(express.json());
