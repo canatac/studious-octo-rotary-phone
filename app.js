@@ -1,9 +1,9 @@
 require('dotenv').config();
 const express = require('express');
-const nodemailer = require('nodemailer');
 const fs = require('fs');
 const path = require('path');
-const dkim = require('nodemailer/lib/dkim');
+const nodemailer = require('nodemailer');
+
 
 const app = express();
 app.use(express.json());
@@ -12,29 +12,32 @@ app.use(express.json());
 const privateKeyPath = path.join(__dirname, process.env.PRIVATE_KEY_PATH);
 const privateKey = fs.readFileSync(privateKeyPath, 'utf8');
 
+// Create a transporter without any transport
+const transporter = nodemailer.createTransport({
+    streamTransport: true,
+    newline: 'unix'
+  });
+
 app.post('/generate-dkim', (req, res) => {
   const { from, to, subject, text } = req.body;
 
-  const headers = {
+  const mailOptions = {
     from,
     to,
     subject,
-    'Content-Type': 'text/plain; charset=utf-8',
-  };
-
-  const body = text;
-
-  try {
-    const signature = dkim.sign({
+    text,
+    dkim: {
       domainName: process.env.DOMAIN_NAME,
       keySelector: process.env.KEY_SELECTOR,
-      privateKey: privateKey,
-      headerFieldNames: 'from:to:subject:content-type',
-      headers,
-      body,
-    });
+      privateKey: privateKey
+    }
+  };
 
-    res.json({ dkimSignature: signature });
+  try {
+    const info = transporter.sendMail(mailOptions);
+    const rawEmail = info.message.toString();
+    const dkimSignature = rawEmail.match(/dkim-signature:.+/i)[0];
+    res.json({ dkimSignature });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
