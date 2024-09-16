@@ -43,7 +43,9 @@ app.post('/generate-dkim', async (req, res) => {
         domainName: process.env.DOMAIN_NAME,
         keySelector: process.env.KEY_SELECTOR,
         privateKey: privateKey,
-        headerFieldNames: 'from:to:subject:content-type'
+        headerFieldNames: 'from:to:subject:content-type',
+        hashAlgo: 'sha256', // Explicitly set the hash algorithm
+        cacheDir: false // Disable caching to ensure fresh signatures
       });
       console.log('DKIM instance created');
 
