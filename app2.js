@@ -19,11 +19,36 @@ const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
   port: parseInt(process.env.SMTP_PORT),
   secure: process.env.SMTP_SECURE === 'true',
+  auth: {
+    user: process.env.SMTP_USER, // Replace with your SMTP username
+    pass: process.env.SMTP_PASS  // Replace with your SMTP password
+  },
+  tls: {
+    // Do not fail on invalid certs
+    rejectUnauthorized: false
+  },
   dkim: {
     domainName: process.env.DOMAIN_NAME,
     keySelector: process.env.KEY_SELECTOR,
     privateKey: privateKey,
   },
+});
+
+// Define the email options
+let mailOptions = {
+  from: 'jim@misfits.ai',
+  to: 'can.atac@gmail.com',
+  subject: 'Test Email from Nodemailer',
+  text: 'This is a test email sent from Nodemailer to the Rust SMTP server.'
+};
+
+// Send the email
+transporter.sendMail(mailOptions, (error, info) => {
+  if (error) {
+    console.log('Error:', error);
+  } else {
+    console.log('Email sent:', info.response);
+  }
 });
 
 app.post('/generate-dkim', async (req, res) => {
