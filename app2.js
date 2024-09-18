@@ -15,7 +15,7 @@ console.log('Private key loaded from:', privateKeyPath);
 console.log('Private key (first 50 chars):', privateKey.substring(0, 50) + '...');
 
 // Create a transporter with DKIM configuration
-const transporter = nodemailer.createTransport({
+var transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
   port: parseInt(process.env.SMTP_PORT),
   secure: process.env.SMTP_SECURE === 'true',
@@ -26,12 +26,7 @@ const transporter = nodemailer.createTransport({
   tls: {
     // Do not fail on invalid certs
     rejectUnauthorized: false
-  },
-  dkim: {
-    domainName: process.env.DOMAIN_NAME,
-    keySelector: process.env.KEY_SELECTOR,
-    privateKey: privateKey,
-  },
+  }
 });
 
 // Define the email options
@@ -39,7 +34,12 @@ let mailOptions = {
   from: 'jim@misfits.ai',
   to: 'can.atac@gmail.com',
   subject: 'Test Email from Nodemailer',
-  text: 'This is a test email sent from Nodemailer to the Rust SMTP server.'
+  text: 'This is a test email sent from Nodemailer to the Rust SMTP server.',
+  dkim: {
+    domainName: process.env.DOMAIN_NAME,
+    keySelector: process.env.KEY_SELECTOR,
+    privateKey: privateKey,
+  }
 };
 
 // Send the email
