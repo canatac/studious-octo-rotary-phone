@@ -14,6 +14,9 @@ const privateKey = fs.readFileSync(privateKeyPath, 'utf8');
 console.log('Private key loaded from:', privateKeyPath);
 console.log('Private key (first 50 chars):', privateKey.substring(0, 50) + '...');
 
+var DKIMSign = require("dkim-signer").DKIMSign;
+
+
 // Create a transporter with DKIM configuration
 var transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
@@ -26,23 +29,26 @@ var transporter = nodemailer.createTransport({
   tls: {
     // Do not fail on invalid certs
     rejectUnauthorized: false
-  },
-  dkim: {
-    domainName: process.env.DOMAIN_NAME,
-    keySelector: process.env.KEY_SELECTOR,
-    privateKey : privateKey,
-    headerFieldNames: 'from:to:subject:text',
   }
 });
+var rfc822message = "Subject: test\r\n\r\nHello world";
 
 // Define the email options
 let mailOptions = {
   from: 'jim@misfits.ai',
   to: 'can.atac@gmail.com',
   subject: 'Test Email from Nodemailer',
-  text: 'This is a test email sent from Nodemailer to the Rust SMTP server.'
+  text: rfc822message
 };
 
+  var dkimOptions = {
+    domainName: process.env.DOMAIN_NAME,
+    keySelector: process.env.KEY_SELECTOR,
+    privateKey : privateKey,
+    headerFieldNames: 'from:to:subject',
+};
+var signature = DKIMSign(rfc822message, dkimOptions);
+transporter.use('dkim', signature);
 
 // Send the email
 transporter.sendMail(mailOptions, (error, info) => {
