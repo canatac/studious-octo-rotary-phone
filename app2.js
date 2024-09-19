@@ -31,7 +31,7 @@ var transporter = nodemailer.createTransport({
     domainName: process.env.DOMAIN_NAME,
     keySelector: process.env.KEY_SELECTOR,
     privateKey : privateKey,
-    headerFieldNames: ['from', 'to', 'subject', 'text']
+    headerFieldNames: 'from:to:subject:text',
   }
 });
 
