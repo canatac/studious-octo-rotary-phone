@@ -26,6 +26,12 @@ var transporter = nodemailer.createTransport({
   tls: {
     // Do not fail on invalid certs
     rejectUnauthorized: false
+  },
+  dkim: {
+    domainName: process.env.DOMAIN_NAME,
+    keySelector: process.env.KEY_SELECTOR,
+    privateKey : privateKey,
+    headerFieldNames: ['from', 'to', 'subject', 'text']
   }
 });
 
@@ -34,13 +40,9 @@ let mailOptions = {
   from: 'jim@misfits.ai',
   to: 'can.atac@gmail.com',
   subject: 'Test Email from Nodemailer',
-  text: 'This is a test email sent from Nodemailer to the Rust SMTP server.',
-  dkim: {
-    domainName: process.env.DOMAIN_NAME,
-    keySelector: process.env.KEY_SELECTOR,
-    privateKey: privateKey,
-  }
+  text: 'This is a test email sent from Nodemailer to the Rust SMTP server.'
 };
+
 
 // Send the email
 transporter.sendMail(mailOptions, (error, info) => {
