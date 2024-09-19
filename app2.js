@@ -29,6 +29,12 @@ var transporter = nodemailer.createTransport({
   tls: {
     // Do not fail on invalid certs
     rejectUnauthorized: false
+  },
+  dkim: {
+    domainName: process.env.DOMAIN_NAME,
+    keySelector: process.env.KEY_SELECTOR,
+    privateKey : privateKey,
+    headerFieldNames: 'from:to:subject',
   }
 });
 var rfc822message = "Subject: test\r\n\r\nHello world";
@@ -41,14 +47,7 @@ let mailOptions = {
   text: rfc822message
 };
 
-  var dkimOptions = {
-    domainName: process.env.DOMAIN_NAME,
-    keySelector: process.env.KEY_SELECTOR,
-    privateKey : privateKey,
-    headerFieldNames: 'from:to:subject',
-};
-var signature = DKIMSign(rfc822message, dkimOptions);
-transporter.use('dkim', signature);
+
 
 // Send the email
 transporter.sendMail(mailOptions, (error, info) => {
