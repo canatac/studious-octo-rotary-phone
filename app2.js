@@ -14,7 +14,6 @@ const privateKey = fs.readFileSync(privateKeyPath, 'utf8');
 console.log('Private key loaded from:', privateKeyPath);
 console.log('Private key (first 50 chars):', privateKey.substring(0, 50) + '...');
 
-var DKIMSign = require("dkim-signer").DKIMSign;
 
 
 // Create a transporter with DKIM configuration
@@ -34,10 +33,11 @@ var transporter = nodemailer.createTransport({
     domainName: process.env.DOMAIN_NAME,
     keySelector: process.env.KEY_SELECTOR,
     privateKey : privateKey,
-    headerFieldNames: 'from:to:subject',
+    headerFieldNames: 'from:to:subject:date:message-id',
+    cacheDir: false
   }
 });
-var rfc822message = "Subject: test\r\n\r\nHello world";
+var rfc822message = "Hello world";
 
 // Define the email options
 let mailOptions = {
