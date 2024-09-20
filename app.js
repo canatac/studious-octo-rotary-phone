@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
-const DKIM = require('nodemailer/lib/dkim');
+const nodemailer = require('nodemailer');
 
 const app = express();
 app.use(express.json());
@@ -11,87 +11,60 @@ app.use(express.json());
 const privateKeyPath = path.join(__dirname, process.env.PRIVATE_KEY_PATH);
 const privateKey = fs.readFileSync(privateKeyPath, 'utf8');
 
-
-console.log('Private key loaded from:', privateKeyPath);
-console.log('Private key (first 50 chars):', privateKey.substring(0, 50) + '...');
-
 app.post('/generate-dkim', async (req, res) => {
-
-    console.log('Received request:', JSON.stringify(req.body, null, 2));
+  console.log('Received request:', JSON.stringify(req.body, null, 2));
 
   const { from, to, subject, text } = req.body;
+    // Create a message object
+    const message = {
+      from,
+      to,
+      subject,
+      text,
+    };
 
-  const headers = {
-    from,
-    to,
-    subject,
-    'Content-Type': 'text/plain; charset=utf-8',
-  };
+// Create a transporter with DKIM configuration
+var transporter = nodemailer.createTransport({
+  host: process.env.SMTP_HOST,
+  port: parseInt(process.env.SMTP_PORT),
+  secure: process.env.SMTP_SECURE === 'true',
+  auth: {
+    user: process.env.SMTP_USER, // Replace with your SMTP username
+    pass: process.env.SMTP_PASS  // Replace with your SMTP password
+  },
+  tls: {
+    // Do not fail on invalid certs
+    rejectUnauthorized: false
+  },
+  dkim: {
+    domainName: process.env.DOMAIN_NAME,
+    keySelector: process.env.KEY_SELECTOR,
+    privateKey : privateKey
+  }
+});
 
-  const body = text;
+// Define the email options
 
-  console.log('Headers:', JSON.stringify(headers, null, 2));
-  console.log('Body:', body);
 
-  try {
+let mailOptions = {
+  from: `<${from}>`,
+  to: `<${to}>`,
+  subject: `${subject}`,
+  text: `${text}`
+};
 
-    console.log('Attempting to generate DKIM signature...');
-    console.log('Domain Name:', process.env.DOMAIN_NAME);
-    console.log('Key Selector:', process.env.KEY_SELECTOR);
+// Send the email
+transporter.sendMail(mailOptions, (error, info) => {
+  if (error) {
+    console.log('Error:', error);
+  } else {
+    console.log('Email sent:', info.response);
+  }
+});
 
-    const dkim = new DKIM({
-        domainName: process.env.DOMAIN_NAME,
-        keySelector: process.env.KEY_SELECTOR,
-        privateKey: privateKey,
-        headerFieldNames: 'from:to:subject:content-type',
-        hashAlgo: 'sha256', // Explicitly set the hash algorithm
-        cacheDir: false // Disable caching to ensure fresh signatures
-      });
-      console.log('DKIM instance created');
+    console.log('Message sent:', info.messageId);
+    console.log('Preview URL:', nodemailer.getTestMessageUrl(info));
 
-      const rawEmail = Object.entries(headers).map(([key, value]) => `${key}: ${value}`).join('\r\n') + '\r\n\r\n' + body;
-      console.log('Raw email constructed:', rawEmail);
-
-      console.log('Starting DKIM signing process...');
-      const signedOutput = await new Promise((resolve, reject) => {
-        let chunks = [];
-        dkim.sign(rawEmail)
-        .on('data', chunk => {
-          console.log('Received chunk:', chunk.toString());
-          chunks.push(chunk);
-        })
-        .on('end', () => {
-          console.log('DKIM signing process completed');
-          resolve(Buffer.concat(chunks).toString('utf8'));
-        })
-        .on('error', error => {
-          console.error('Error during DKIM signing:', error);
-          reject(error);
-        });
-      });
-
-    console.log('DKIM Signature generated successfully');
-    console.log('Signed output:', signedOutput);
-
-    const dkimSignatureMatch = signedOutput.match(/DKIM-Signature:[\s\S]+?(?=\r\n\S)/i);
-    if (dkimSignatureMatch) {
-      let dkimSignature = dkimSignatureMatch[0].trim();
-      
-      // Clean up the b= field
-      dkimSignature = dkimSignature.replace(/b=([^;]+)/, (match, p1) => {
-        return 'b=' + p1.replace(/\s+/g, '');
-      });
-
-      console.log('Cleaned DKIM Signature:', dkimSignature);
-      res.json({ dkimSignature });
-    } else {
-      console.error('DKIM Signature not found in signed output');
-      res.status(500).json({ error: 'DKIM Signature not found in signed output' });
-    }
-    } catch (error) {
-        console.error('Error generating DKIM signature:', error);
-        res.status(500).json({ error: error.message });
-    }
 });
 
 const PORT = process.env.PORT || 3000;
