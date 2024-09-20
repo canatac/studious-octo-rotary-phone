@@ -107,7 +107,8 @@ app.post('/generate-dkim', async (req, res) => {
     // Send mail with defined transport object
     const info = await transporter.sendMail(mailOptions);
     console.log('Message sent: %s', info.messageId);
-    res.status(200).json({ message: 'Email sent successfully', messageId: info.messageId });
+    res.status(200).json({ message: 'Email sent successfully', messageId: info.messageId, status: 'success' });
+    return;
   } catch (error) {
     console.error('Error sending email:', error);
     res.status(500).json({ error: 'Failed to send email' });
