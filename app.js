@@ -62,9 +62,6 @@ transporter.sendMail(mailOptions, (error, info) => {
   }
 });
 
-    console.log('Message sent:', info.messageId);
-    console.log('Preview URL:', nodemailer.getTestMessageUrl(info));
-
 });
 
 const PORT = process.env.PORT || 3000;
