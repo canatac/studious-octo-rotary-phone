@@ -115,6 +115,17 @@ app.post('/generate-dkim', async (req, res) => {
   }
 });
 
+/**
+ * Health check route
+ * @route GET /health
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ * @returns {void}
+ */
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok', message: 'Service is running' });
+});
+
 // Start the server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
