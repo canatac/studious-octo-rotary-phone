@@ -17,6 +17,24 @@ This application provides an API endpoint to generate DKIM signatures and send e
 - Access to an SMTP server
 - A DKIM private key file
 
+### Creating a DKIM Private Key
+
+To generate a DKIM private key, you can use OpenSSL. Follow these steps:
+
+1.  **Generate a Private Key:**
+    ```bash
+    openssl genrsa -out private.key 2048
+    ```
+    This command generates a 2048-bit RSA private key and saves it to `private.key`.
+
+2.  **Extract the Public Key:**
+    ```bash
+    openssl rsa -in private.key -pubout -out public.key
+    ```
+    This command extracts the public key from the private key and saves it to `public.key`. You will need to add this public key to your DNS records.
+
+**Note:** Keep your private key secure and ensure it is accessible by the application at the path specified in your `.env` file.
+
 ### Installation
 
 1. **Update the System:**
