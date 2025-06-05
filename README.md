@@ -17,6 +17,42 @@ This application provides an API endpoint to generate DKIM signatures and send e
 - Access to an SMTP server
 - A DKIM private key file
 
+### Creating a DKIM Private Key
+
+To generate a DKIM private key, you can use OpenSSL. Follow these steps:
+
+1.  **Generate a Private Key:**
+    ```bash
+    openssl genrsa -out private.key 2048
+    ```
+    This command generates a 2048-bit RSA private key and saves it to `private.key`.
+
+2.  **Extract the Public Key:**
+    ```bash
+    openssl rsa -in private.key -pubout -out public.key
+    ```
+    This command extracts the public key from the private key and saves it to `public.key`. You will need to add this public key to your DNS records.
+
+3.  **Add the Public Key to Your DNS Records:**
+
+    You need to add the public key (contents of `public.key`) as a TXT record in your domain's DNS settings. The record typically looks like this:
+
+    `selector._domainkey.yourdomain.com IN TXT "v=DKIM1; k=rsa; p=YOUR_PUBLIC_KEY_STRING"`
+
+    -   Replace `selector` with your chosen DKIM selector (e.g., `default`, `mail`). This selector is also used in the email headers.
+    -   Replace `yourdomain.com` with your actual domain name.
+    -   Replace `YOUR_PUBLIC_KEY_STRING` with the actual content of your `public.key` file, removing any line breaks. It should be a single long string.
+
+    **Example:**
+
+    If your selector is `dkim` and your domain is `example.com`, and your `public.key` content is `MIIBIjANBgkqhkiG9...DAQAB`, the TXT record would be:
+
+    `dkim._domainkey.example.com IN TXT "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9...DAQAB"`
+
+    The exact steps for adding a TXT record vary depending on your DNS provider (e.g., GoDaddy, Cloudflare, AWS Route 53). Consult your DNS provider's documentation for specific instructions.
+
+**Note:** Keep your private key secure and ensure it is accessible by the application at the path specified in your `.env` file.
+
 ### Installation
 
 1. **Update the System:**
