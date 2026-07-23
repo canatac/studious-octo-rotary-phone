@@ -107,8 +107,17 @@ smtp-sink 1025 10
 curl -X GET http://localhost:3000/health
 ```
 
-### 2. Send a Test Email (with DKIM)
+### 3. Send a Test Email (with DKIM)
+**Prerequisite**: A running SMTP server (e.g., `aiosmtpd`, `smtp-sink`, or Postfix).
+
 ```bash
+# Start a local SMTP server (aiosmtpd)
+pip3 install aiosmtpd
+python3 -m aiosmtpd -n -l localhost:1025
+```
+
+```bash
+# Send a test email (DKIM signing)
 curl -X POST http://localhost:3000/generate-dkim \
 -H "Content-Type: application/json" \
 -d '{
@@ -119,9 +128,9 @@ curl -X POST http://localhost:3000/generate-dkim \
 }'
 ```
 
-### 3. Verify DKIM Signature
-- Check the **SMTP server logs** for the email.
-- Use a **DKIM validator** (e.g., [DKIM Validator](https://dkimvalidator.com/)).
+**Troubleshooting**:
+- If the email fails to send, check the **DKIM server logs** (`/tmp/dkim-server.log`).
+- If `aiosmtpd` is not available, use `smtp-sink` (Postfix) or a real SMTP server.
 
 ---
 
