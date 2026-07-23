@@ -79,13 +79,22 @@ node app.js
 ### 2. Start a Local SMTP Server (for Testing)
 #### Option A: `aiosmtpd` (Python)
 ```bash
-pip install aiosmtpd
+# Install pip (if not installed)
+sudo apt-get install -y python3-pip
+
+# Install aiosmtpd
+pip3 install aiosmtpd
+
+# Start SMTP server
 python3 -m aiosmtpd -n -l localhost:1025
 ```
 
 #### Option B: `smtp-sink` (Postfix)
 ```bash
+# Install Postfix
 sudo apt-get install -y postfix
+
+# Start SMTP server
 smtp-sink 1025 10
 ```
 
