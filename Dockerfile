@@ -1,23 +1,30 @@
-# Use the official Node.js image as a base
-FROM node:16
+# Dockerfile - DKIM Service (Node.js 22)
+# studious-octo-rotary-phone
 
-# Set the working directory inside the container
+FROM node:22-bookworm-slim
+
 WORKDIR /app
 
-# Copy package.json and package-lock.json to the working directory
+# Copy package files first for better layer caching
 COPY package*.json ./
 
-# Install the application dependencies
-RUN npm install
+# Install production dependencies only
+RUN npm ci --omit=dev || npm install --omit=dev
 
-# Copy the rest of the application code to the working directory
+# Copy application code
 COPY . .
+
+# Create directory for DKIM keys (mounted from host at runtime)
+RUN mkdir -p /app/dkim
 
 # Expose the port the app runs on
 EXPOSE 3000
 
-# Define environment variable for production
+# Production environment
 ENV NODE_ENV=production
 
-# Start the application
-CMD ["node", "app.js"] 
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
+
+CMD ["node", "app.js"]
