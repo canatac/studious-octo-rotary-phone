@@ -1,4 +1,4 @@
-name: CI/CD Pipeline - DKIM Service (Azure ACR -> Scaleway VM)
+name: CI/CD Pipeline - DKIM Service (Scaleway Container Registry -> Scaleway VM)
 
 on:
   push:
@@ -8,8 +8,7 @@ on:
   workflow_dispatch:
 
 env:
-  ACR_NAME: ${{ secrets.ACR_NAME }}
-  ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
+  SCW_REGISTRY_ENDPOINT: ${{ secrets.SCW_REGISTRY_ENDPOINT }}
 
 jobs:
   # ============================================================
@@ -34,30 +33,37 @@ jobs:
         run: node --check app.js
 
   # ============================================================
-  # JOB 2 : Build & Push DKIM image via az acr build
+  # JOB 2 : Build & Push DKIM image via Docker Buildx to SCW Registry
   # ============================================================
   build-push-dkim:
-    name: Build & Push DKIM image (az acr build)
+    name: Build & Push DKIM image (SCW Registry)
     needs: test
     runs-on: ubuntu-latest
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
 
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Build & push DKIM image (remote ACR build, no local Docker)
-        run: |
-          set -euo pipefail
-          az acr build \
-            --image dkim-service:latest \
-            --image dkim-service:${{ github.sha }} \
-            --registry ${{ env.ACR_NAME }} \
-            --file Dockerfile \
-            .
+      - name: Login to Scaleway Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.SCW_REGISTRY_ENDPOINT }}
+          username: ${{ secrets.SCW_ACCESS_KEY }}
+          password: ${{ secrets.SCW_SECRET_KEY }}
+
+      - name: Build & push DKIM image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.SCW_REGISTRY_ENDPOINT }}/dkim-service:latest
+            ${{ env.SCW_REGISTRY_ENDPOINT }}/dkim-service:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   # ============================================================
   # JOB 3 : Trigger deployment workflow on reimagined-guide
