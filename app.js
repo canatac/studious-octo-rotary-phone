@@ -36,6 +36,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const nodemailer = require('nodemailer');
+const dns = require('dns').promises;
 
 // Load environment variables
 dotenv.config();
@@ -123,6 +124,18 @@ app.post('/generate-dkim', async (req, res) => {
     const pending = Array.isArray(info.pending) ? info.pending : [];
     const acceptedByRemoteMx = accepted.length > 0;
 
+    const smtpHost = process.env.SMTP_HOST || null;
+    const smtpPort = Number.parseInt(process.env.SMTP_PORT, 10) || null;
+    let remoteIp = null;
+    if (smtpHost) {
+      try {
+        const resolved = await dns.lookup(smtpHost);
+        remoteIp = resolved && resolved.address ? resolved.address : null;
+      } catch (lookupError) {
+        console.warn('SMTP host lookup failed:', lookupError && lookupError.message ? lookupError.message : lookupError);
+      }
+    }
+
     res.status(acceptedByRemoteMx ? 200 : 502).json({
       message: acceptedByRemoteMx
         ? 'Email accepted by upstream SMTP server'
@@ -135,6 +148,9 @@ app.post('/generate-dkim', async (req, res) => {
       pending,
       response: info.response || null,
       envelope: info.envelope || null,
+      smtpHost,
+      smtpPort,
+      remoteIp,
     });
     return;
   } catch (error) {
