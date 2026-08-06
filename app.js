@@ -66,14 +66,23 @@ const privateKey = fs.readFileSync(privateKeyPath, 'utf8');
 app.post('/generate-dkim', async (req, res) => {
   console.log('Received request:', JSON.stringify(req.body, null, 2));
 
-  const { from, to, subject, text } = req.body;
+  const { from, to, subject, text, html } = req.body;
+
+  if (!from || !to || !subject || (!text && !html)) {
+    res.status(400).json({
+      status: 'error',
+      message: 'Missing required fields: from, to, subject, and text or html',
+    });
+    return;
+  }
 
   // Create a message object
   const message = {
     from,
     to,
     subject,
-    text,
+    text: text || '',
+    html,
   };
 
   // Create a transporter with DKIM configuration
@@ -97,21 +106,46 @@ app.post('/generate-dkim', async (req, res) => {
 
   // Define the email options
   const mailOptions = {
-    from: `<${from}>`,
-    to: `<${to}>`,
-    subject: `${subject}`,
-    text: `${text}`
+    from,
+    to,
+    subject,
+    text: message.text,
+    html: message.html,
   };
 
   try {
     // Send mail with defined transport object
     const info = await transporter.sendMail(mailOptions);
     console.log('Message sent: %s', info.messageId);
-    res.status(200).json({ message: 'Email sent successfully', messageId: info.messageId, status: 'success' });
+
+    const accepted = Array.isArray(info.accepted) ? info.accepted : [];
+    const rejected = Array.isArray(info.rejected) ? info.rejected : [];
+    const pending = Array.isArray(info.pending) ? info.pending : [];
+    const acceptedByRemoteMx = accepted.length > 0;
+
+    res.status(acceptedByRemoteMx ? 200 : 502).json({
+      message: acceptedByRemoteMx
+        ? 'Email accepted by upstream SMTP server'
+        : 'Email was not accepted by upstream SMTP server',
+      messageId: info.messageId,
+      status: acceptedByRemoteMx ? 'success' : 'error',
+      acceptedByRemoteMx,
+      accepted,
+      rejected,
+      pending,
+      response: info.response || null,
+      envelope: info.envelope || null,
+    });
     return;
   } catch (error) {
     console.error('Error sending email:', error);
-    res.status(500).json({ error: 'Failed to send email' });
+    res.status(500).json({
+      status: 'error',
+      error: 'Failed to send email',
+      message: error && error.message ? error.message : 'Unknown SMTP error',
+      response: error && error.response ? error.response : null,
+      code: error && error.code ? error.code : null,
+    });
   }
 });
 
