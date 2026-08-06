@@ -76,11 +76,21 @@ jobs:
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     steps:
       - name: Trigger repository_dispatch
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          DEPLOY_REPO: ${{ secrets.DEPLOY_REPO }}
+          SCW_REGISTRY_ENDPOINT: ${{ secrets.SCW_REGISTRY_ENDPOINT }}
         run: |
           set -euo pipefail
+
+          if [ -z "${GH_PAT:-}" ] || [ -z "${DEPLOY_REPO:-}" ]; then
+            echo "GH_PAT or DEPLOY_REPO secret is missing"
+            exit 1
+          fi
+
           curl -sf -X POST \
             -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${{ secrets.GH_PAT }}" \
-            https://api.github.com/repos/${{ secrets.DEPLOY_REPO }}/dispatches \
-            -d '{"event_type": "deploy", "client_payload": {"source": "studious-octo-rotary-phone", "sha": "${{ github.sha }}"}}'
-          echo "Deployment triggered on ${{ secrets.DEPLOY_REPO }}"
+            -H "Authorization: Bearer ${GH_PAT}" \
+            https://api.github.com/repos/${DEPLOY_REPO}/dispatches \
+            -d '{"event_type":"deploy","client_payload":{"source":"studious-octo-rotary-phone","sha":"${{ github.sha }}","image":"'"${SCW_REGISTRY_ENDPOINT}"'/dkim-service:latest","tag":"latest"}}'
+          echo "Deployment triggered on ${DEPLOY_REPO} for image ${SCW_REGISTRY_ENDPOINT}/dkim-service:latest"
