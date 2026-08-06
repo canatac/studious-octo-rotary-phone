@@ -16,7 +16,7 @@ jobs:
   # ============================================================
   test:
     name: Lint & Test
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, scw-rust-large]
     steps:
       - uses: actions/checkout@v4
 
@@ -38,7 +38,7 @@ jobs:
   build-push-dkim:
     name: Build & Push DKIM image (SCW Registry)
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, scw-rust-large]
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
@@ -73,7 +73,7 @@ jobs:
   trigger-deploy:
     name: Trigger deployment on reimagined-guide
     needs: build-push-dkim
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, scw-rust-large]
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     steps:
       - name: Trigger repository_dispatch
