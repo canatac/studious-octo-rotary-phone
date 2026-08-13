@@ -86,6 +86,22 @@ app.post('/generate-dkim', async (req, res) => {
     html,
   };
 
+  // Determine DKIM signing domain from the From address (multi-domain support).
+  // Falls back to DOMAIN_NAME when the From domain is not explicitly allowed.
+  const fromDomain = String(from)
+    .split('@').pop()
+    .toLowerCase()
+    .replace(/[>\s]+$/g, '')
+    .trim();
+  const allowedDomains = (process.env.DKIM_DOMAINS || process.env.DOMAIN_NAME || '')
+    .split(',')
+    .map(s => s.trim().toLowerCase())
+    .filter(Boolean);
+  const signingDomain = allowedDomains.includes(fromDomain)
+    ? fromDomain
+    : process.env.DOMAIN_NAME;
+  console.log(`DKIM sign: from=${fromDomain} d=${signingDomain} s=${process.env.KEY_SELECTOR}`);
+
   // Create a transporter with DKIM configuration
   const transporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST,
@@ -99,7 +115,7 @@ app.post('/generate-dkim', async (req, res) => {
       rejectUnauthorized: false
     },
     dkim: {
-      domainName: process.env.DOMAIN_NAME,
+      domainName: signingDomain,
       keySelector: process.env.KEY_SELECTOR,
       privateKey: privateKey
     }
