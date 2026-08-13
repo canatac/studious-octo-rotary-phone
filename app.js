@@ -77,12 +77,34 @@ app.post('/generate-dkim', async (req, res) => {
     return;
   }
 
+  // Derive a plain-text fallback from HTML when caller only provided html.
+  // Sending balises HTML inside a text/plain part triggers anti-spam heuristics
+  // (MIME_HTML_ONLY / MPART_ALT_DIFF) and hurts inbox placement.
+  const htmlToPlainText = (h) => String(h)
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<\/?(p|div|br|li|tr|h[1-6])[^>]*>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  const plainText = (typeof text === 'string' && text.trim().length > 0)
+    ? text
+    : (html ? htmlToPlainText(html) : '');
+
   // Create a message object
   const message = {
     from,
     to,
     subject,
-    text: text || '',
+    text: plainText,
     html,
   };
 
