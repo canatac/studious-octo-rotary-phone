@@ -67,7 +67,7 @@ const privateKey = fs.readFileSync(privateKeyPath, 'utf8');
 app.post('/generate-dkim', async (req, res) => {
   console.log('Received request:', JSON.stringify(req.body, null, 2));
 
-  const { from, to, subject, text, html } = req.body;
+  const { from, to, subject, text, html, attachments } = req.body;
 
   if (!from || !to || !subject || (!text && !html)) {
     res.status(400).json({
@@ -143,6 +143,18 @@ app.post('/generate-dkim', async (req, res) => {
     }
   });
 
+  const normalizedAttachments = Array.isArray(attachments)
+    ? attachments
+        .filter((att) => att && typeof att.filename === 'string' && typeof att.dataBase64 === 'string' && att.dataBase64.trim().length > 0)
+        .map((att) => ({
+          filename: String(att.filename).trim() || 'attachment.bin',
+          content: Buffer.from(att.dataBase64, 'base64'),
+          contentType: typeof att.contentType === 'string' && att.contentType.trim().length > 0
+            ? att.contentType.trim()
+            : undefined,
+        }))
+    : [];
+
   // Define the email options
   const mailOptions = {
     from,
@@ -150,6 +162,7 @@ app.post('/generate-dkim', async (req, res) => {
     subject,
     text: message.text,
     html: message.html,
+    attachments: normalizedAttachments,
   };
 
   try {
