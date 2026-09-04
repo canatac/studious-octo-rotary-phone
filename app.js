@@ -47,8 +47,10 @@ dotenv.config();
  */
 const app = express();
 
-// Middleware to parse JSON bodies
-app.use(express.json());
+// Middleware to parse JSON bodies (attachments can make payload large).
+const requestBodyLimit = process.env.REQUEST_BODY_LIMIT || '50mb';
+app.use(express.json({ limit: requestBodyLimit }));
+app.use(express.urlencoded({ extended: true, limit: requestBodyLimit }));
 
 /**
  * Read private key from file
@@ -214,6 +216,18 @@ app.post('/generate-dkim', async (req, res) => {
       code: error && error.code ? error.code : null,
     });
   }
+});
+
+// Return JSON (not HTML) for oversized payloads to keep frontend error handling deterministic.
+app.use((err, req, res, next) => {
+  if (err && (err.type === 'entity.too.large' || err.status === 413)) {
+    return res.status(413).json({
+      status: 'error',
+      code: 'PAYLOAD_TOO_LARGE',
+      message: `Request body too large. Increase REQUEST_BODY_LIMIT (current: ${requestBodyLimit}).`,
+    });
+  }
+  return next(err);
 });
 
 /**
