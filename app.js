@@ -356,6 +356,8 @@ app.post('/signing-domain-config/import', (req, res) => {
  */
 app.post('/generate-dkim', async (req, res) => {
   console.log('Received request:', JSON.stringify(req.body, null, 2));
+  signerDiagnosticsState.totalSignAttempts += 1;
+  signerDiagnosticsState.lastSignAt = new Date().toISOString();
 
   const { from, to, subject, text, html, attachments } = req.body;
 
@@ -470,6 +472,18 @@ app.post('/generate-dkim', async (req, res) => {
     const pending = Array.isArray(info.pending) ? info.pending : [];
     const acceptedByRemoteMx = accepted.length > 0;
 
+    if (acceptedByRemoteMx) {
+      signerDiagnosticsState.totalSignSuccess += 1;
+      signerDiagnosticsState.lastSuccessAt = new Date().toISOString();
+      signerDiagnosticsState.lastFailureCode = null;
+      signerDiagnosticsState.lastFailureMessage = null;
+    } else {
+      signerDiagnosticsState.totalSignFailure += 1;
+      signerDiagnosticsState.lastFailureAt = new Date().toISOString();
+      signerDiagnosticsState.lastFailureCode = 'UPSTREAM_REJECTED';
+      signerDiagnosticsState.lastFailureMessage = 'SMTP upstream did not accept recipients';
+    }
+
     const smtpHost = process.env.SMTP_HOST || null;
     const smtpPort = Number.parseInt(process.env.SMTP_PORT, 10) || null;
     let remoteIp = null;
@@ -501,6 +515,10 @@ app.post('/generate-dkim', async (req, res) => {
     return;
   } catch (error) {
     console.error('Error sending email:', error);
+    signerDiagnosticsState.totalSignFailure += 1;
+    signerDiagnosticsState.lastFailureAt = new Date().toISOString();
+    signerDiagnosticsState.lastFailureCode = error && error.code ? error.code : 'SEND_ERROR';
+    signerDiagnosticsState.lastFailureMessage = error && error.message ? error.message : 'Unknown SMTP error';
     res.status(500).json({
       status: 'error',
       error: 'Failed to send email',
@@ -521,6 +539,108 @@ app.use((err, req, res, next) => {
     });
   }
   return next(err);
+});
+
+app.get('/diagnostics/signer', async (req, res) => {
+  const selector = (runtimeConfig.keySelector || process.env.KEY_SELECTOR || '').trim();
+  const selectorConfigured = selector.length > 0;
+  const keyAbsolutePath = toAbsolutePath(runtimeConfig.privateKeyPath);
+  const keyFileExists = keyAbsolutePath ? fs.existsSync(keyAbsolutePath) : false;
+
+  let keyLastModifiedAt = null;
+  let keyAgeDays = null;
+  if (keyFileExists) {
+    try {
+      const stats = fs.statSync(keyAbsolutePath);
+      keyLastModifiedAt = stats.mtime.toISOString();
+      keyAgeDays = Math.floor((Date.now() - stats.mtime.getTime()) / (1000 * 60 * 60 * 24));
+    } catch (e) {
+      keyLastModifiedAt = null;
+      keyAgeDays = null;
+    }
+  }
+
+  const activeDomains = runtimeConfig.dkimDomains.filter((domain) => !deactivatedDomains.has(domain));
+  const domainChecks = await Promise.all(activeDomains.map(async (domain) => {
+    const host = `${selector}._domainkey.${domain}`;
+
+    if (!selectorConfigured) {
+      return {
+        domain,
+        host,
+        status: 'critical',
+        code: 'SELECTOR_MISSING',
+        detail: 'No KEY_SELECTOR configured',
+      };
+    }
+
+    try {
+      const records = await dns.resolveTxt(host);
+      const txt = records.map((parts) => parts.join('')).join(' ').toLowerCase();
+      const hasVersion = txt.includes('v=dkim1');
+      const hasPublicKey = txt.includes('p=');
+      if (hasVersion && hasPublicKey) {
+        return {
+          domain,
+          host,
+          status: 'healthy',
+          code: 'DKIM_SELECTOR_OK',
+          detail: 'Selector TXT contains v=DKIM1 and p=',
+        };
+      }
+      return {
+        domain,
+        host,
+        status: 'degraded',
+        code: 'DKIM_SELECTOR_SHAPE_INVALID',
+        detail: 'Selector TXT record exists but misses v=DKIM1 or p=',
+      };
+    } catch (error) {
+      return {
+        domain,
+        host,
+        status: 'critical',
+        code: 'DKIM_SELECTOR_LOOKUP_FAILED',
+        detail: error && error.code ? error.code : 'DNS lookup failed',
+      };
+    }
+  }));
+
+  const status = resolveSignerSummary({ selectorConfigured, keyFileExists, domainChecks });
+
+  res.status(200).json({
+    status,
+    selector: {
+      value: selector || null,
+      configured: selectorConfigured,
+      activeDomains,
+      domainChecks,
+    },
+    key: {
+      path: runtimeConfig.privateKeyPath || null,
+      exists: keyFileExists,
+      lastModifiedAt: keyLastModifiedAt,
+      ageDays: keyAgeDays,
+      rotationWindowDays: 90,
+      rotationDue: keyAgeDays === null ? null : keyAgeDays >= 90,
+    },
+    signing: {
+      since: signerDiagnosticsState.startedAt,
+      totalAttempts: signerDiagnosticsState.totalSignAttempts,
+      totalSuccess: signerDiagnosticsState.totalSignSuccess,
+      totalFailure: signerDiagnosticsState.totalSignFailure,
+      lastSignAt: signerDiagnosticsState.lastSignAt,
+      lastSuccessAt: signerDiagnosticsState.lastSuccessAt,
+      lastFailureAt: signerDiagnosticsState.lastFailureAt,
+      lastFailureCode: signerDiagnosticsState.lastFailureCode,
+      lastFailureMessage: signerDiagnosticsState.lastFailureMessage,
+    },
+    operationalPlaybook: {
+      healthy: 'No action required.',
+      degraded: 'Validate selector TXT value and inspect signer failures.',
+      critical: 'Restore KEY_SELECTOR/private key path or DNS selector before onboarding.',
+    },
+  });
 });
 
 /**
