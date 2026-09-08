@@ -10,6 +10,9 @@ This application provides an **API endpoint** to generate **DKIM signatures** an
 - **Domain deactivation safeguard** with dry-run impact preview + explicit confirmation token.
 - **Signing-domain config export/import** for migration portability.
 - **Versioned import schema (`v1`)** with dry-run diff before apply.
+- **Route modules** for signer admin responsibilities:
+  - `routes/domain_deactivation.js`
+  - `routes/signing_domain_config.js`
 - **Environment variable configuration** (`.env`).
 - **Health check endpoint** (`GET /health`).
 - **Signer diagnostics endpoint** (`GET /diagnostics/signer`) with key age, selector status, and last-sign telemetry.
