@@ -12,6 +12,7 @@ This application provides an **API endpoint** to generate **DKIM signatures** an
 - **Versioned import schema (`v1`)** with dry-run diff before apply.
 - **Environment variable configuration** (`.env`).
 - **Health check endpoint** (`GET /health`).
+- **Signer diagnostics endpoint** (`GET /diagnostics/signer`) with key age, selector status, and last-sign telemetry.
 - **Docker support** for easy deployment.
 
 ### Domain Deactivation Safeguard API
@@ -162,6 +163,17 @@ Rollback procedure:
 ```bash
 curl -X GET http://localhost:3000/health
 ```
+
+### 2. Signer Diagnostics
+```bash
+curl -X GET http://localhost:3000/diagnostics/signer
+```
+
+Response contract highlights:
+- `status`: `healthy | degraded | critical`
+- `selector.domainChecks[]`: per-domain selector check status/code
+- `key.ageDays` and `key.rotationDue` for 90-day key rotation threshold
+- `signing.lastSignAt`, `lastSuccessAt`, `lastFailureAt`, `lastFailureCode`
 
 ### 3. Send a Test Email (with DKIM)
 **Prerequisite**: A running SMTP server (e.g., `aiosmtpd`, `smtp-sink`, or Postfix).
