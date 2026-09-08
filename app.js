@@ -109,6 +109,35 @@ const resolveSignerSummary = ({ selectorConfigured, keyFileExists, domainChecks 
   return 'healthy';
 };
 
+const normalizeTxtSegment = (segment) => String(segment || '')
+  .trim()
+  .replace(/^"|"$/g, '');
+
+const parseTxtTagMap = (segments) => {
+  const raw = (Array.isArray(segments) ? segments : [segments])
+    .map((segment) => normalizeTxtSegment(segment))
+    .join('');
+
+  const tags = raw
+    .split(';')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .reduce((acc, part) => {
+      const eqIndex = part.indexOf('=');
+      if (eqIndex <= 0) {
+        return acc;
+      }
+      const key = part.slice(0, eqIndex).trim().toLowerCase();
+      const value = part.slice(eqIndex + 1).trim();
+      if (key.length > 0) {
+        acc[key] = value;
+      }
+      return acc;
+    }, {});
+
+  return { raw, tags };
+};
+
 // Middleware to parse JSON bodies (attachments can make payload large).
 const requestBodyLimit = process.env.REQUEST_BODY_LIMIT || '50mb';
 app.use(express.json({ limit: requestBodyLimit }));
@@ -576,16 +605,17 @@ app.get('/diagnostics/signer', async (req, res) => {
 
     try {
       const records = await dns.resolveTxt(host);
-      const txt = records.map((parts) => parts.join('')).join(' ').toLowerCase();
-      const hasVersion = txt.includes('v=dkim1');
-      const hasPublicKey = txt.includes('p=');
+      const parsedRecords = records.map((segments) => parseTxtTagMap(segments));
+      const dkimRecord = parsedRecords.find((entry) => String(entry.tags.v || '').toLowerCase() === 'dkim1');
+      const hasVersion = Boolean(dkimRecord);
+      const hasPublicKey = Boolean(dkimRecord && Object.prototype.hasOwnProperty.call(dkimRecord.tags, 'p'));
       if (hasVersion && hasPublicKey) {
         return {
           domain,
           host,
           status: 'healthy',
           code: 'DKIM_SELECTOR_OK',
-          detail: 'Selector TXT contains v=DKIM1 and p=',
+          detail: 'Selector TXT parsed (multiline-safe) with v=DKIM1 and p=',
         };
       }
       return {
@@ -593,7 +623,7 @@ app.get('/diagnostics/signer', async (req, res) => {
         host,
         status: 'degraded',
         code: 'DKIM_SELECTOR_SHAPE_INVALID',
-        detail: 'Selector TXT record exists but misses v=DKIM1 or p=',
+        detail: `Selector TXT malformed after multiline parse (records=${records.length})`,
       };
     } catch (error) {
       return {
