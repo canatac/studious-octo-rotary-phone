@@ -47,10 +47,111 @@ dotenv.config();
  */
 const app = express();
 
+const DEACTIVATION_CONFIRMATION_TOKEN = 'DEACTIVATE_DOMAIN';
+const deactivatedDomains = new Set();
+
+const normalizeDomain = (value) => String(value || '')
+  .trim()
+  .toLowerCase()
+  .replace(/^@+/, '')
+  .replace(/[>\s]+$/g, '');
+
+const parseConfiguredDomains = () => {
+  const raw = process.env.DKIM_DOMAINS || process.env.DOMAIN_NAME || '';
+  return raw
+    .split(',')
+    .map((s) => normalizeDomain(s))
+    .filter(Boolean);
+};
+
+const buildDeactivationImpact = (domain, configuredDomains) => ({
+  domain,
+  impactedRoutes: ['/generate-dkim'],
+  impactedSelectors: [process.env.KEY_SELECTOR || 'default'],
+  remainingActiveDomains: configuredDomains.filter(
+    (candidate) => candidate !== domain && !deactivatedDomains.has(candidate),
+  ),
+});
+
 // Middleware to parse JSON bodies (attachments can make payload large).
 const requestBodyLimit = process.env.REQUEST_BODY_LIMIT || '50mb';
 app.use(express.json({ limit: requestBodyLimit }));
 app.use(express.urlencoded({ extended: true, limit: requestBodyLimit }));
+
+app.post('/domains/:domain/deactivate', (req, res) => {
+  const configuredDomains = parseConfiguredDomains();
+  const domain = normalizeDomain(req.params.domain);
+  const dryRunRequested = req.query.dryRun === 'true' || req.body?.dryRun === true;
+  const fallbackDomain = normalizeDomain(process.env.DOMAIN_NAME);
+  const impact = buildDeactivationImpact(domain, configuredDomains);
+
+  if (!domain || !configuredDomains.includes(domain)) {
+    return res.status(404).json({
+      status: 'error',
+      code: 'DOMAIN_NOT_CONFIGURED',
+      message: 'Domain is not configured for DKIM signing',
+      configuredDomains,
+    });
+  }
+
+  if (dryRunRequested) {
+    return res.status(200).json({
+      status: 'dry_run',
+      domain,
+      impact,
+      fallbackDomainWillRotate: fallbackDomain === domain,
+      proposedFallbackDomain: fallbackDomain === domain ? impact.remainingActiveDomains[0] || null : fallbackDomain,
+      remediationSteps: [
+        'Migrate aliases/signing traffic to another active domain',
+        `Resubmit with confirmation='${DEACTIVATION_CONFIRMATION_TOKEN}' to apply`,
+      ],
+    });
+  }
+
+  const confirmation = String(req.body?.confirmation || '').trim();
+  if (confirmation !== DEACTIVATION_CONFIRMATION_TOKEN) {
+    return res.status(409).json({
+      status: 'error',
+      code: 'DEACTIVATION_CONFIRMATION_REQUIRED',
+      message: 'Domain deactivation blocked. Explicit confirmation token required.',
+      requiredConfirmation: DEACTIVATION_CONFIRMATION_TOKEN,
+      impact,
+      remediationSteps: [
+        'Run dry-run first: POST /domains/{domain}/deactivate?dryRun=true',
+        `Resubmit with confirmation='${DEACTIVATION_CONFIRMATION_TOKEN}'`,
+      ],
+    });
+  }
+
+  if (impact.remainingActiveDomains.length === 0) {
+    return res.status(409).json({
+      status: 'error',
+      code: 'LAST_SIGNING_DOMAIN_PROTECTED',
+      message: 'Cannot deactivate the last active signing domain.',
+      impact,
+      remediationSteps: ['Add another active signing domain before deactivation.'],
+    });
+  }
+
+  deactivatedDomains.add(domain);
+  console.log('[AUDIT] domain_deactivated', JSON.stringify({
+    domain,
+    impactedEntitiesCount: 1 + impact.impactedRoutes.length + impact.impactedSelectors.length,
+    remainingActiveDomains: impact.remainingActiveDomains,
+    fallbackDomain,
+    fallbackDomainRotated: fallbackDomain === domain,
+    proposedFallbackDomain: fallbackDomain === domain ? impact.remainingActiveDomains[0] : fallbackDomain,
+  }));
+
+  return res.status(200).json({
+    status: 'success',
+    message: 'Domain deactivated with safeguard confirmation.',
+    domain,
+    impact,
+    fallbackDomainRotated: fallbackDomain === domain,
+    fallbackDomain: fallbackDomain === domain ? impact.remainingActiveDomains[0] : fallbackDomain,
+  });
+});
 
 /**
  * Read private key from file
@@ -112,18 +213,26 @@ app.post('/generate-dkim', async (req, res) => {
 
   // Determine DKIM signing domain from the From address (multi-domain support).
   // Falls back to DOMAIN_NAME when the From domain is not explicitly allowed.
-  const fromDomain = String(from)
-    .split('@').pop()
-    .toLowerCase()
-    .replace(/[>\s]+$/g, '')
-    .trim();
-  const allowedDomains = (process.env.DKIM_DOMAINS || process.env.DOMAIN_NAME || '')
-    .split(',')
-    .map(s => s.trim().toLowerCase())
-    .filter(Boolean);
+  const fromDomain = normalizeDomain(String(from).split('@').pop());
+  const allowedDomains = parseConfiguredDomains();
+  const fallbackDomain = normalizeDomain(process.env.DOMAIN_NAME);
   const signingDomain = allowedDomains.includes(fromDomain)
     ? fromDomain
-    : process.env.DOMAIN_NAME;
+    : fallbackDomain;
+
+  if (deactivatedDomains.has(signingDomain)) {
+    return res.status(409).json({
+      status: 'error',
+      code: 'SIGNING_DOMAIN_DEACTIVATED',
+      message: `Signing domain '${signingDomain}' is deactivated.`,
+      impact: buildDeactivationImpact(signingDomain, allowedDomains),
+      remediationSteps: [
+        'Use a sender address from an active DKIM domain',
+        `Or reactivate '${signingDomain}' before retrying`,
+      ],
+    });
+  }
+
   console.log(`DKIM sign: from=${fromDomain} d=${signingDomain} s=${process.env.KEY_SELECTOR}`);
 
   // Create a transporter with DKIM configuration

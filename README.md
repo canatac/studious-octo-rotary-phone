@@ -7,9 +7,19 @@ This application provides an **API endpoint** to generate **DKIM signatures** an
 ### Key Features
 - **Generates DKIM signatures** for emails.
 - **Sends emails with DKIM signatures** (via SMTP).
+- **Domain deactivation safeguard** with dry-run impact summary and explicit confirmation token.
 - **Environment variable configuration** (`.env`).
 - **Health check endpoint** (`GET /health`).
 - **Docker support** for easy deployment.
+
+### Domain Deactivation Safeguard API
+
+`POST /domains/{domain}/deactivate`
+
+- `?dryRun=true` previews impact: affected signing route/selector + remaining active domains.
+- Without `confirmation=DEACTIVATE_DOMAIN`, API blocks with `409 DEACTIVATION_CONFIRMATION_REQUIRED`.
+- API protects against disabling the last active signing domain (`409 LAST_SIGNING_DOMAIN_PROTECTED`).
+- Every confirmed deactivation emits audit log event `domain_deactivated` with impacted count.
 
 ### Recent Updates (2026-07-23)
 - **Dependency upgrades**: Updated `nodemailer` to `6.9.15` (security fixes).
