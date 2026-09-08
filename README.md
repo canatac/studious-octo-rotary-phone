@@ -172,6 +172,7 @@ curl -X GET http://localhost:3000/diagnostics/signer
 Response contract highlights:
 - `status`: `healthy | degraded | critical`
 - `selector.domainChecks[]`: per-domain selector check status/code
+- DNS TXT multiline records are normalized before DKIM tag validation
 - `key.ageDays` and `key.rotationDue` for 90-day key rotation threshold
 - `signing.lastSignAt`, `lastSuccessAt`, `lastFailureAt`, `lastFailureCode`
 
