@@ -27,6 +27,58 @@ This application provides an **API endpoint** to generate **DKIM signatures** an
 - API refuses deactivation of the last active signing domain (`409 LAST_SIGNING_DOMAIN_PROTECTED`).
 - Confirmed deactivation emits an audit log event `domain_deactivated` with impacted entity count.
 
+### Domain Readiness API
+
+`GET /domains/{domain}/readiness`
+
+- Returns per-check pass/fail for DKIM selector TXT, SPF TXT, and MX records.
+- Returns stable `code` values (`DOMAIN_READY`, `DOMAIN_NOT_READY`, `DOMAIN_NOT_CONFIGURED`, ...).
+- Includes actionable `remediation` hints for each failed check.
+
+Example request:
+
+```bash
+curl -X GET http://localhost:3000/domains/example.com/readiness
+```
+
+Example response:
+
+```json
+{
+  "status": "not_ready",
+  "code": "DOMAIN_NOT_READY",
+  "domain": "example.com",
+  "ready": false,
+  "checks": [
+    {
+      "control": "dkim_selector",
+      "status": "fail",
+      "code": "DKIM_SELECTOR_LOOKUP_FAILED",
+      "detail": "ENOTFOUND",
+      "remediation": "Publish TXT at <selector>._domainkey.<domain> with v=DKIM1; p=<public-key>."
+    },
+    {
+      "control": "spf_record",
+      "status": "pass",
+      "code": "SPF_OK",
+      "detail": "SPF TXT found on example.com",
+      "remediation": null
+    },
+    {
+      "control": "mx_record",
+      "status": "pass",
+      "code": "MX_OK",
+      "detail": "MX records found for example.com",
+      "remediation": null
+    }
+  ],
+  "remediation": [
+    "Publish TXT at <selector>._domainkey.<domain> with v=DKIM1; p=<public-key>."
+  ],
+  "checkedAt": "2026-09-08T13:40:00.000Z"
+}
+```
+
 ### Signing-domain Config Portability API
 
 `GET /signing-domain-config/export`
