@@ -138,6 +138,128 @@ const parseTxtTagMap = (segments) => {
   return { raw, tags };
 };
 
+const remediationByCode = {
+  DOMAIN_NOT_CONFIGURED: 'Add the domain to DKIM_DOMAINS (or DOMAIN_NAME) and redeploy.',
+  SELECTOR_MISSING: 'Set KEY_SELECTOR in environment and redeploy the service.',
+  DKIM_SELECTOR_LOOKUP_FAILED: 'Publish TXT at <selector>._domainkey.<domain> with v=DKIM1; p=<public-key>.',
+  DKIM_SELECTOR_SHAPE_INVALID: 'Fix DKIM TXT shape. Expected v=DKIM1 and non-empty p= tag.',
+  SPF_LOOKUP_FAILED: 'Publish SPF TXT on the root domain, e.g. v=spf1 include:<provider> ~all.',
+  SPF_MISSING: 'Add SPF TXT record on the root domain with v=spf1 policy.',
+  MX_LOOKUP_FAILED: 'Publish at least one MX record for the domain.',
+};
+
+const evaluateDomainReadiness = async (domain) => {
+  const normalizedDomain = normalizeDomain(domain);
+  const configuredDomains = parseConfiguredDomains();
+  const selector = (runtimeConfig.keySelector || process.env.KEY_SELECTOR || '').trim();
+
+  if (!normalizedDomain || !configuredDomains.includes(normalizedDomain)) {
+    return {
+      domain: normalizedDomain,
+      ready: false,
+      code: 'DOMAIN_NOT_CONFIGURED',
+      checks: [],
+      remediation: remediationByCode.DOMAIN_NOT_CONFIGURED,
+    };
+  }
+
+  const checks = [];
+
+  if (!selector) {
+    checks.push({
+      control: 'dkim_selector',
+      status: 'fail',
+      code: 'SELECTOR_MISSING',
+      detail: 'KEY_SELECTOR is not configured',
+      remediation: remediationByCode.SELECTOR_MISSING,
+    });
+  } else {
+    const dkimHost = `${selector}._domainkey.${normalizedDomain}`;
+    try {
+      const records = await dns.resolveTxt(dkimHost);
+      const parsedRecords = records.map((segments) => parseTxtTagMap(segments));
+      const dkimRecord = parsedRecords.find((entry) => String(entry.tags.v || '').toLowerCase() === 'dkim1');
+      const publicKey = String((dkimRecord && dkimRecord.tags && dkimRecord.tags.p) || '').trim();
+      if (dkimRecord && publicKey.length > 0) {
+        checks.push({
+          control: 'dkim_selector',
+          status: 'pass',
+          code: 'DKIM_SELECTOR_OK',
+          detail: `TXT found on ${dkimHost} with v=DKIM1 and p=`,
+          remediation: null,
+        });
+      } else {
+        checks.push({
+          control: 'dkim_selector',
+          status: 'fail',
+          code: 'DKIM_SELECTOR_SHAPE_INVALID',
+          detail: `TXT found on ${dkimHost} but required tags are missing`,
+          remediation: remediationByCode.DKIM_SELECTOR_SHAPE_INVALID,
+        });
+      }
+    } catch (error) {
+      checks.push({
+        control: 'dkim_selector',
+        status: 'fail',
+        code: 'DKIM_SELECTOR_LOOKUP_FAILED',
+        detail: error && error.code ? error.code : 'DNS lookup failed',
+        remediation: remediationByCode.DKIM_SELECTOR_LOOKUP_FAILED,
+      });
+    }
+  }
+
+  try {
+    const txtRecords = await dns.resolveTxt(normalizedDomain);
+    const flattenedTxt = txtRecords.map((segments) => parseTxtTagMap(segments).raw.toLowerCase());
+    const hasSpf = flattenedTxt.some((entry) => entry.startsWith('v=spf1'));
+    checks.push({
+      control: 'spf_record',
+      status: hasSpf ? 'pass' : 'fail',
+      code: hasSpf ? 'SPF_OK' : 'SPF_MISSING',
+      detail: hasSpf ? `SPF TXT found on ${normalizedDomain}` : `No SPF TXT (v=spf1) found on ${normalizedDomain}`,
+      remediation: hasSpf ? null : remediationByCode.SPF_MISSING,
+    });
+  } catch (error) {
+    checks.push({
+      control: 'spf_record',
+      status: 'fail',
+      code: 'SPF_LOOKUP_FAILED',
+      detail: error && error.code ? error.code : 'DNS lookup failed',
+      remediation: remediationByCode.SPF_LOOKUP_FAILED,
+    });
+  }
+
+  try {
+    const mxRecords = await dns.resolveMx(normalizedDomain);
+    const hasMx = Array.isArray(mxRecords) && mxRecords.length > 0;
+    checks.push({
+      control: 'mx_record',
+      status: hasMx ? 'pass' : 'fail',
+      code: hasMx ? 'MX_OK' : 'MX_LOOKUP_FAILED',
+      detail: hasMx ? `MX records found for ${normalizedDomain}` : `No MX records found for ${normalizedDomain}`,
+      remediation: hasMx ? null : remediationByCode.MX_LOOKUP_FAILED,
+    });
+  } catch (error) {
+    checks.push({
+      control: 'mx_record',
+      status: 'fail',
+      code: 'MX_LOOKUP_FAILED',
+      detail: error && error.code ? error.code : 'DNS lookup failed',
+      remediation: remediationByCode.MX_LOOKUP_FAILED,
+    });
+  }
+
+  const failingChecks = checks.filter((check) => check.status === 'fail');
+  return {
+    domain: normalizedDomain,
+    ready: failingChecks.length === 0,
+    code: failingChecks.length === 0 ? 'DOMAIN_READY' : 'DOMAIN_NOT_READY',
+    checks,
+    remediation: failingChecks.map((check) => check.remediation).filter(Boolean),
+    checkedAt: new Date().toISOString(),
+  };
+};
+
 // Middleware to parse JSON bodies (attachments can make payload large).
 const requestBodyLimit = process.env.REQUEST_BODY_LIMIT || '50mb';
 app.use(express.json({ limit: requestBodyLimit }));
@@ -212,6 +334,32 @@ app.post('/domains/:domain/deactivate', (req, res) => {
     message: 'Domain deactivated with safeguard confirmation.',
     domain,
     impact,
+  });
+});
+
+app.get('/domains/:domain/readiness', async (req, res) => {
+  const readiness = await evaluateDomainReadiness(req.params.domain);
+  if (readiness.code === 'DOMAIN_NOT_CONFIGURED') {
+    res.status(404).json({
+      status: 'error',
+      code: readiness.code,
+      domain: readiness.domain,
+      ready: false,
+      checks: readiness.checks,
+      remediation: [readiness.remediation],
+      checkedAt: new Date().toISOString(),
+    });
+    return;
+  }
+
+  res.status(200).json({
+    status: readiness.ready ? 'ready' : 'not_ready',
+    code: readiness.code,
+    domain: readiness.domain,
+    ready: readiness.ready,
+    checks: readiness.checks,
+    remediation: readiness.remediation,
+    checkedAt: readiness.checkedAt,
   });
 });
 
@@ -696,6 +844,7 @@ module.exports = {
   app,
   normalizeDomain,
   parseConfiguredDomains,
+  evaluateDomainReadiness,
   resolveSigningDomain,
   buildDeactivationImpact,
   deactivatedDomains,
