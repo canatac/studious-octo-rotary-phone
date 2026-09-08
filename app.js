@@ -57,6 +57,9 @@ const normalizeDomain = (value) => String(value || '')
   .replace(/[>\s]+$/g, '');
 
 const parseConfiguredDomains = () => {
+  if (runtimeConfig && Array.isArray(runtimeConfig.dkimDomains) && runtimeConfig.dkimDomains.length > 0) {
+    return runtimeConfig.dkimDomains;
+  }
   const raw = process.env.DKIM_DOMAINS || process.env.DOMAIN_NAME || '';
   return raw
     .split(',')
@@ -64,14 +67,47 @@ const parseConfiguredDomains = () => {
     .filter(Boolean);
 };
 
+const resolveSigningDomain = (fromAddress, configuredDomains) => {
+  const fromDomain = normalizeDomain(String(fromAddress).split('@').pop());
+  if (configuredDomains.includes(fromDomain)) {
+    return { fromDomain, signingDomain: fromDomain };
+  }
+
+  const fallback = normalizeDomain((runtimeConfig && runtimeConfig.domainName) || process.env.DOMAIN_NAME);
+  return { fromDomain, signingDomain: fallback || configuredDomains[0] || '' };
+};
+
 const buildDeactivationImpact = (domain, configuredDomains) => ({
   domain,
-  impactedRoutes: ['/generate-dkim'],
-  impactedSelectors: [process.env.KEY_SELECTOR || 'default'],
+  wouldDisableSigningForDomain: true,
   remainingActiveDomains: configuredDomains.filter(
     (candidate) => candidate !== domain && !deactivatedDomains.has(candidate),
   ),
+  impactedRoutes: ['/generate-dkim'],
+  impactedSelectors: [(runtimeConfig && runtimeConfig.keySelector) || process.env.KEY_SELECTOR || 'default'],
 });
+
+const signerDiagnosticsState = {
+  startedAt: new Date().toISOString(),
+  totalSignAttempts: 0,
+  totalSignSuccess: 0,
+  totalSignFailure: 0,
+  lastSignAt: null,
+  lastSuccessAt: null,
+  lastFailureAt: null,
+  lastFailureCode: null,
+  lastFailureMessage: null,
+};
+
+const resolveSignerSummary = ({ selectorConfigured, keyFileExists, domainChecks }) => {
+  if (!selectorConfigured || !keyFileExists || domainChecks.some((entry) => entry.status === 'critical')) {
+    return 'critical';
+  }
+  if (domainChecks.some((entry) => entry.status === 'degraded') || signerDiagnosticsState.lastFailureAt) {
+    return 'degraded';
+  }
+  return 'healthy';
+};
 
 // Middleware to parse JSON bodies (attachments can make payload large).
 const requestBodyLimit = process.env.REQUEST_BODY_LIMIT || '50mb';
@@ -82,35 +118,35 @@ app.post('/domains/:domain/deactivate', (req, res) => {
   const configuredDomains = parseConfiguredDomains();
   const domain = normalizeDomain(req.params.domain);
   const dryRunRequested = req.query.dryRun === 'true' || req.body?.dryRun === true;
-  const fallbackDomain = normalizeDomain(process.env.DOMAIN_NAME);
-  const impact = buildDeactivationImpact(domain, configuredDomains);
 
   if (!domain || !configuredDomains.includes(domain)) {
-    return res.status(404).json({
+    res.status(404).json({
       status: 'error',
       code: 'DOMAIN_NOT_CONFIGURED',
       message: 'Domain is not configured for DKIM signing',
       configuredDomains,
     });
+    return;
   }
 
+  const impact = buildDeactivationImpact(domain, configuredDomains);
+
   if (dryRunRequested) {
-    return res.status(200).json({
+    res.status(200).json({
       status: 'dry_run',
       domain,
       impact,
-      fallbackDomainWillRotate: fallbackDomain === domain,
-      proposedFallbackDomain: fallbackDomain === domain ? impact.remainingActiveDomains[0] || null : fallbackDomain,
       remediationSteps: [
         'Migrate aliases/signing traffic to another active domain',
-        `Resubmit with confirmation='${DEACTIVATION_CONFIRMATION_TOKEN}' to apply`,
+        `Repeat request with confirmation='${DEACTIVATION_CONFIRMATION_TOKEN}' to confirm deactivation`,
       ],
     });
+    return;
   }
 
   const confirmation = String(req.body?.confirmation || '').trim();
   if (confirmation !== DEACTIVATION_CONFIRMATION_TOKEN) {
-    return res.status(409).json({
+    res.status(409).json({
       status: 'error',
       code: 'DEACTIVATION_CONFIRMATION_REQUIRED',
       message: 'Domain deactivation blocked. Explicit confirmation token required.',
@@ -121,16 +157,18 @@ app.post('/domains/:domain/deactivate', (req, res) => {
         `Resubmit with confirmation='${DEACTIVATION_CONFIRMATION_TOKEN}'`,
       ],
     });
+    return;
   }
 
   if (impact.remainingActiveDomains.length === 0) {
-    return res.status(409).json({
+    res.status(409).json({
       status: 'error',
       code: 'LAST_SIGNING_DOMAIN_PROTECTED',
       message: 'Cannot deactivate the last active signing domain.',
       impact,
       remediationSteps: ['Add another active signing domain before deactivation.'],
     });
+    return;
   }
 
   deactivatedDomains.add(domain);
@@ -138,27 +176,176 @@ app.post('/domains/:domain/deactivate', (req, res) => {
     domain,
     impactedEntitiesCount: 1 + impact.impactedRoutes.length + impact.impactedSelectors.length,
     remainingActiveDomains: impact.remainingActiveDomains,
-    fallbackDomain,
-    fallbackDomainRotated: fallbackDomain === domain,
-    proposedFallbackDomain: fallbackDomain === domain ? impact.remainingActiveDomains[0] : fallbackDomain,
   }));
 
-  return res.status(200).json({
+  res.status(200).json({
     status: 'success',
     message: 'Domain deactivated with safeguard confirmation.',
     domain,
     impact,
-    fallbackDomainRotated: fallbackDomain === domain,
-    fallbackDomain: fallbackDomain === domain ? impact.remainingActiveDomains[0] : fallbackDomain,
   });
 });
 
-/**
- * Read private key from file
- * @type {string}
- */
-const privateKeyPath = path.join(__dirname, process.env.PRIVATE_KEY_PATH);
-const privateKey = fs.readFileSync(privateKeyPath, 'utf8');
+const normalizeDomainList = (value) => String(value || '')
+  .split(',')
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean);
+
+const toAbsolutePath = (candidatePath) => {
+  if (!candidatePath) {
+    return null;
+  }
+  return path.isAbsolute(candidatePath)
+    ? candidatePath
+    : path.join(__dirname, candidatePath);
+};
+
+const readPrivateKeyFromPath = (candidatePath) => {
+  const absolutePath = toAbsolutePath(candidatePath);
+  if (!absolutePath) {
+    throw new Error('PRIVATE_KEY_PATH is required');
+  }
+  return fs.readFileSync(absolutePath, 'utf8');
+};
+
+let runtimeConfig = {
+  schemaVersion: 'v1',
+  domainName: (process.env.DOMAIN_NAME || '').trim().toLowerCase(),
+  keySelector: (process.env.KEY_SELECTOR || '').trim(),
+  dkimDomains: normalizeDomainList(process.env.DKIM_DOMAINS || process.env.DOMAIN_NAME || ''),
+  privateKeyPath: process.env.PRIVATE_KEY_PATH,
+};
+
+let privateKey = readPrivateKeyFromPath(runtimeConfig.privateKeyPath);
+
+const secureConfigToken = process.env.CONFIG_EXPORT_IMPORT_TOKEN || process.env.ADMIN_TOKEN || '';
+
+const hasSecureAccess = (req) => {
+  if (!secureConfigToken) {
+    return false;
+  }
+  const authHeader = String(req.get('authorization') || '');
+  const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+  const bodyToken = req.body && typeof req.body.token === 'string' ? req.body.token.trim() : '';
+  const queryToken = typeof req.query.token === 'string' ? req.query.token.trim() : '';
+  return bearer === secureConfigToken || bodyToken === secureConfigToken || queryToken === secureConfigToken;
+};
+
+const validateImportPayload = (payload) => {
+  if (!payload || typeof payload !== 'object') {
+    return { ok: false, error: 'Payload must be a JSON object' };
+  }
+
+  if (payload.schemaVersion !== 'v1') {
+    return { ok: false, error: 'Unsupported schemaVersion. Expected v1' };
+  }
+
+  const cfg = payload.config;
+  if (!cfg || typeof cfg !== 'object') {
+    return { ok: false, error: 'config object is required' };
+  }
+
+  if (typeof cfg.domainName !== 'string' || !cfg.domainName.trim()) {
+    return { ok: false, error: 'config.domainName must be a non-empty string' };
+  }
+
+  if (typeof cfg.keySelector !== 'string' || !cfg.keySelector.trim()) {
+    return { ok: false, error: 'config.keySelector must be a non-empty string' };
+  }
+
+  if (!Array.isArray(cfg.dkimDomains) || cfg.dkimDomains.length === 0 || cfg.dkimDomains.some((d) => typeof d !== 'string' || !d.trim())) {
+    return { ok: false, error: 'config.dkimDomains must be a non-empty string array' };
+  }
+
+  return { ok: true };
+};
+
+const buildDiff = (before, after) => {
+  const diff = {};
+  const keys = ['domainName', 'keySelector', 'dkimDomains', 'privateKeyPath'];
+  keys.forEach((key) => {
+    const beforeValue = JSON.stringify(before[key]);
+    const afterValue = JSON.stringify(after[key]);
+    if (beforeValue !== afterValue) {
+      diff[key] = { before: before[key], after: after[key] };
+    }
+  });
+  return diff;
+};
+
+app.get('/signing-domain-config/export', (req, res) => {
+  const secure = String(req.query.secure || '').toLowerCase() === 'true';
+  const allowPrivateKey = secure && hasSecureAccess(req);
+
+  const bundle = {
+    schemaVersion: 'v1',
+    exportedAt: new Date().toISOString(),
+    config: {
+      domainName: runtimeConfig.domainName,
+      keySelector: runtimeConfig.keySelector,
+      dkimDomains: runtimeConfig.dkimDomains,
+      privateKeyPath: runtimeConfig.privateKeyPath,
+      privateKeyIncluded: allowPrivateKey,
+    },
+  };
+
+  if (allowPrivateKey) {
+    bundle.config.privateKey = privateKey;
+  }
+
+  res.status(200).json(bundle);
+});
+
+app.post('/signing-domain-config/import', (req, res) => {
+  const validation = validateImportPayload(req.body);
+  if (!validation.ok) {
+    return res.status(400).json({ status: 'error', message: validation.error });
+  }
+
+  const dryRun = req.body.dryRun !== false;
+  const secure = req.body.secure === true;
+  const allowPrivateKey = secure && hasSecureAccess(req);
+
+  const importedConfig = {
+    schemaVersion: 'v1',
+    domainName: req.body.config.domainName.trim().toLowerCase(),
+    keySelector: req.body.config.keySelector.trim(),
+    dkimDomains: req.body.config.dkimDomains.map((d) => d.trim().toLowerCase()).filter(Boolean),
+    privateKeyPath: req.body.config.privateKeyPath || runtimeConfig.privateKeyPath,
+  };
+
+  const diff = buildDiff(runtimeConfig, importedConfig);
+
+  if (dryRun) {
+    return res.status(200).json({
+      status: 'ok',
+      applied: false,
+      dryRun: true,
+      schemaVersion: 'v1',
+      diff,
+    });
+  }
+
+  if (secure && req.body.config.privateKey && !allowPrivateKey) {
+    return res.status(403).json({ status: 'error', message: 'Secure import requested but token is missing or invalid' });
+  }
+
+  runtimeConfig = importedConfig;
+
+  if (secure && typeof req.body.config.privateKey === 'string' && req.body.config.privateKey.trim()) {
+    privateKey = req.body.config.privateKey;
+  } else {
+    privateKey = readPrivateKeyFromPath(runtimeConfig.privateKeyPath);
+  }
+
+  return res.status(200).json({
+    status: 'ok',
+    applied: true,
+    dryRun: false,
+    schemaVersion: 'v1',
+    diff,
+  });
+});
 
 /**
  * Route to generate DKIM signature and send email
@@ -213,27 +400,24 @@ app.post('/generate-dkim', async (req, res) => {
 
   // Determine DKIM signing domain from the From address (multi-domain support).
   // Falls back to DOMAIN_NAME when the From domain is not explicitly allowed.
-  const fromDomain = normalizeDomain(String(from).split('@').pop());
   const allowedDomains = parseConfiguredDomains();
-  const fallbackDomain = normalizeDomain(process.env.DOMAIN_NAME);
-  const signingDomain = allowedDomains.includes(fromDomain)
-    ? fromDomain
-    : fallbackDomain;
+  const { fromDomain, signingDomain } = resolveSigningDomain(from, allowedDomains);
 
   if (deactivatedDomains.has(signingDomain)) {
-    return res.status(409).json({
+    res.status(409).json({
       status: 'error',
       code: 'SIGNING_DOMAIN_DEACTIVATED',
       message: `Signing domain '${signingDomain}' is deactivated.`,
       impact: buildDeactivationImpact(signingDomain, allowedDomains),
       remediationSteps: [
-        'Use a sender address from an active DKIM domain',
-        `Or reactivate '${signingDomain}' before retrying`,
+        'Use a sender address on an active DKIM domain',
+        `Or reactivate domain before calling /generate-dkim again`,
       ],
     });
+    return;
   }
 
-  console.log(`DKIM sign: from=${fromDomain} d=${signingDomain} s=${process.env.KEY_SELECTOR}`);
+  console.log(`DKIM sign: from=${fromDomain} d=${signingDomain} s=${runtimeConfig.keySelector}`);
 
   // Create a transporter with DKIM configuration
   const transporter = nodemailer.createTransport({
@@ -249,7 +433,7 @@ app.post('/generate-dkim', async (req, res) => {
     },
     dkim: {
       domainName: signingDomain,
-      keySelector: process.env.KEY_SELECTOR,
+      keySelector: runtimeConfig.keySelector,
       privateKey: privateKey
     }
   });
@@ -352,6 +536,18 @@ app.get('/health', (req, res) => {
 
 // Start the server
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+  });
+}
+
+module.exports = {
+  app,
+  normalizeDomain,
+  parseConfiguredDomains,
+  resolveSigningDomain,
+  buildDeactivationImpact,
+  deactivatedDomains,
+  DEACTIVATION_CONFIRMATION_TOKEN,
+};

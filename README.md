@@ -7,7 +7,9 @@ This application provides an **API endpoint** to generate **DKIM signatures** an
 ### Key Features
 - **Generates DKIM signatures** for emails.
 - **Sends emails with DKIM signatures** (via SMTP).
-- **Domain deactivation safeguard** with dry-run impact summary and explicit confirmation token.
+- **Domain deactivation safeguard** with dry-run impact preview + explicit confirmation token.
+- **Signing-domain config export/import** for migration portability.
+- **Versioned import schema (`v1`)** with dry-run diff before apply.
 - **Environment variable configuration** (`.env`).
 - **Health check endpoint** (`GET /health`).
 - **Docker support** for easy deployment.
@@ -16,10 +18,25 @@ This application provides an **API endpoint** to generate **DKIM signatures** an
 
 `POST /domains/{domain}/deactivate`
 
-- `?dryRun=true` previews impact: affected signing route/selector + remaining active domains.
+- `?dryRun=true` returns impact summary (routes/selectors/remaining active domains) without deactivation.
 - Without `confirmation=DEACTIVATE_DOMAIN`, API blocks with `409 DEACTIVATION_CONFIRMATION_REQUIRED`.
-- API protects against disabling the last active signing domain (`409 LAST_SIGNING_DOMAIN_PROTECTED`).
-- Every confirmed deactivation emits audit log event `domain_deactivated` with impacted count.
+- API refuses deactivation of the last active signing domain (`409 LAST_SIGNING_DOMAIN_PROTECTED`).
+- Confirmed deactivation emits an audit log event `domain_deactivated` with impacted entity count.
+
+### Signing-domain Config Portability API
+
+`GET /signing-domain-config/export`
+
+- Returns a versioned `v1` JSON bundle.
+- Private key is excluded by default.
+- Add `?secure=true` with valid token (`CONFIG_EXPORT_IMPORT_TOKEN` or `ADMIN_TOKEN`) to include private key.
+
+`POST /signing-domain-config/import`
+
+- Validates `schemaVersion: "v1"` and required config fields.
+- `dryRun=true` (default) returns `diff` without applying changes.
+- `dryRun=false` applies config in-memory for active process.
+- Secure private-key import requires `secure=true` and valid token.
 
 ### Recent Updates (2026-07-23)
 - **Dependency upgrades**: Updated `nodemailer` to `6.9.15` (security fixes).
@@ -111,6 +128,35 @@ smtp-sink 1025 10
 ---
 
 ## Testing
+
+### 0. Portability flow (export/import)
+```bash
+# Export sanitized bundle
+curl -X GET "http://localhost:3000/signing-domain-config/export"
+
+# Dry-run import (validation + diff, no apply)
+curl -X POST "http://localhost:3000/signing-domain-config/import" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "schemaVersion": "v1",
+    "dryRun": true,
+    "config": {
+      "domainName": "example.com",
+      "keySelector": "default",
+      "dkimDomains": ["example.com"],
+      "privateKeyPath": "./dkim-private.pem"
+    }
+  }'
+```
+
+Migration procedure:
+1) Export bundle from source environment.
+2) Dry-run import on target and validate `diff`.
+3) Apply same payload with `dryRun=false`.
+
+Rollback procedure:
+1) Re-import previous exported bundle with `dryRun=false`.
+2) Verify `/health` and one `/generate-dkim` smoke request.
 
 ### 1. Health Check
 ```bash
