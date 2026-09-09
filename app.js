@@ -534,6 +534,9 @@ registerSigningDomainConfigRoutes({
 
 registerMtaStsRoutes(app);
 
+// DANE/TLSA record validation routes (issue #34)
+daneRoutes.registerDaneRoutes(app);
+
 /**
  * Route to generate DKIM signature and send email
  * @route POST /generate-dkim
