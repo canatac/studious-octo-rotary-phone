@@ -438,6 +438,12 @@ registerSigningDomainConfigRoutes({
 // TLS-RPT routes (issue #35)
 tlsRptRoutes.registerTlsRptRoutes(app);
 
+// MTA-STS routes (issue #32)
+registerMtaStsRoutes(app);
+
+// DMARC routes (issue #36)
+registerDmarcRoutes(app);
+
 /**
  * Route to generate DKIM signature and send email
  * @route POST /generate-dkim
