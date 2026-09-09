@@ -39,6 +39,9 @@ const nodemailer = require('nodemailer');
 const dns = require('dns').promises;
 const { registerDomainDeactivationRoute } = require('./routes/domain_deactivation');
 const { registerSigningDomainConfigRoutes } = require('./routes/signing_domain_config');
+const { registerMtaStsRoutes } = require('./routes/mta_sts');
+const { registerDmarcRoutes } = require('./routes/dmarc');
+const tlsRptRoutes = require('./routes/tls_rpt');
 
 // Load environment variables
 dotenv.config();
@@ -431,6 +434,9 @@ registerSigningDomainConfigRoutes({
   readPrivateKeyFromPath,
   secureConfigToken,
 });
+
+// TLS-RPT routes (issue #35)
+tlsRptRoutes.registerTlsRptRoutes(app);
 
 /**
  * Route to generate DKIM signature and send email
