@@ -42,6 +42,7 @@ const { registerSigningDomainConfigRoutes } = require('./routes/signing_domain_c
 const { registerMtaStsRoutes } = require('./routes/mta_sts');
 const { registerDmarcRoutes } = require('./routes/dmarc');
 const tlsRptRoutes = require('./routes/tls_rpt');
+const { registerBounceRoutes } = require('./routes/bounce');
 
 // Load environment variables
 dotenv.config();
@@ -542,6 +543,9 @@ registerMtaStsRoutes(app);
 
 // DMARC routes (issue #36)
 registerDmarcRoutes(app);
+
+// Bounce classification and handling (issue #46)
+registerBounceRoutes(app);
 
 /**
  * Route to generate DKIM signature and send email
