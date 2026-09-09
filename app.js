@@ -143,6 +143,21 @@ const parseTxtTagMap = (segments) => {
   return { raw, tags };
 };
 
+/// Parse BIMI record from DNS TXT segments
+/// BIMI format: v=BIMI1; l=<logo-url>; a=<authority-url>
+const parseBimiRecord = (segments) => {
+  const { tags } = parseTxtTagMap(segments);
+  const version = String(tags.v || '').toLowerCase();
+  if (version !== 'bimi1') {
+    return null;
+  }
+  return {
+    version,
+    logoUrl: String(tags.l || '').trim(),
+    authorityUrl: String(tags.a || '').trim(),
+  };
+};
+
 const remediationByCode = {
   DOMAIN_NOT_CONFIGURED: 'Add the domain to DKIM_DOMAINS (or DOMAIN_NAME) and redeploy.',
   SELECTOR_MISSING: 'Set KEY_SELECTOR in environment and redeploy the service.',
@@ -251,6 +266,39 @@ const evaluateDomainReadiness = async (domain) => {
       code: 'MX_LOOKUP_FAILED',
       detail: error && error.code ? error.code : 'DNS lookup failed',
       remediation: remediationByCode.MX_LOOKUP_FAILED,
+    });
+  }
+
+  // BIMI brand indicator check (issue #33)
+  try {
+    const bimiHost = `default._bimi.${normalizedDomain}`;
+    const bimiRecords = await dns.resolveTxt(bimiHost);
+    const bimiParsed = bimiRecords.map((segments) => parseBimiRecord(segments));
+    const bimiRecord = bimiParsed.find((r) => r !== null);
+    if (bimiRecord) {
+      checks.push({
+        control: 'bimi_brand_indicator',
+        status: 'pass',
+        code: 'BIMI_OK',
+        detail: `BIMI record found at ${bimiHost} (logo: ${bimiRecord.logoUrl ? 'present' : 'missing'})`,
+        remediation: null,
+      });
+    } else {
+      checks.push({
+        control: 'bimi_brand_indicator',
+        status: 'degraded',
+        code: 'BIMI_MISSING',
+        detail: `No BIMI record found at ${bimiHost}`,
+        remediation: 'Publish BIMI TXT record at default._bimi.<domain> with v=BIMI1; l=<logo-url>; a=<authority-url>',
+      });
+    }
+  } catch (error) {
+    checks.push({
+      control: 'bimi_brand_indicator',
+      status: 'degraded',
+      code: 'BIMI_LOOKUP_FAILED',
+      detail: error && error.code ? error.code : 'DNS lookup failed',
+      remediation: 'Verify DNS resolution for default._bimi.<domain>',
     });
   }
 
@@ -376,6 +424,57 @@ app.get('/domains/:domain/readiness', async (req, res) => {
     remediation: readiness.remediation,
     checkedAt: readiness.checkedAt,
   });
+});
+
+/**
+ * BIMI brand indicator endpoint
+ * @route GET /domains/:domain/bimi
+ */
+app.get('/domains/:domain/bimi', async (req, res) => {
+  const normalizedDomain = normalizeDomain(req.params.domain);
+  const configuredDomains = parseConfiguredDomains();
+
+  if (!normalizedDomain || !configuredDomains.includes(normalizedDomain)) {
+    res.status(404).json({
+      status: 'error',
+      code: 'DOMAIN_NOT_CONFIGURED',
+      message: 'Domain is not configured for DKIM signing',
+      configuredDomains,
+    });
+    return;
+  }
+
+  const bimiHost = `default._bimi.${normalizedDomain}`;
+  try {
+    const bimiRecords = await dns.resolveTxt(bimiHost);
+    const bimiParsed = bimiRecords.map((segments) => parseBimiRecord(segments));
+    const bimiRecord = bimiParsed.find((r) => r !== null);
+    if (bimiRecord) {
+      res.status(200).json({
+        status: 'found',
+        domain: normalizedDomain,
+        host: bimiHost,
+        record: bimiRecord,
+        checkedAt: new Date().toISOString(),
+      });
+    } else {
+      res.status(200).json({
+        status: 'not_found',
+        domain: normalizedDomain,
+        host: bimiHost,
+        message: 'No BIMI record found. Publish BIMI TXT at default._bimi.<domain> with v=BIMI1; l=<logo-url>; a=<authority-url>',
+        checkedAt: new Date().toISOString(),
+      });
+    }
+  } catch (error) {
+    res.status(200).json({
+      status: 'dns_error',
+      domain: normalizedDomain,
+      host: bimiHost,
+      message: error && error.code ? error.code : 'DNS lookup failed',
+      checkedAt: new Date().toISOString(),
+    });
+  }
 });
 
 const normalizeDomainList = (value) => String(value || '')
