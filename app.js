@@ -251,11 +251,21 @@ const evaluateDomainReadiness = async (domain) => {
     });
   }
 
+  // SPF/DKIM alignment check (issue #28 fix)
+  const dkimCheck = checks.find((c) => c.control === 'dkim_selector');
+  const spfCheck = checks.find((c) => c.control === 'spf_record');
+  const isAligned = dkimCheck && spfCheck && dkimCheck.status === 'pass' && spfCheck.status === 'pass';
+  if (isAligned) {
+    checks.push({ control: 'alignment', status: 'pass', code: 'SPF_DKIM_ALIGNED', detail: `SPF and DKIM aligned for ${normalizedDomain}`, remediation: null });
+  } else if (dkimCheck && dkimCheck.status === 'pass') {
+    checks.push({ control: 'alignment', status: 'degraded', code: 'SPF_DKIM_ALIGNMENT_PARTIAL', detail: `DKIM configured but SPF missing/invalid for ${normalizedDomain}`, remediation: 'Add SPF record to achieve full alignment' });
+  }
   const failingChecks = checks.filter((check) => check.status === 'fail');
+  const degradedChecks = checks.filter((check) => check.status === 'degraded');
   return {
     domain: normalizedDomain,
     ready: failingChecks.length === 0,
-    code: failingChecks.length === 0 ? 'DOMAIN_READY' : 'DOMAIN_NOT_READY',
+    code: failingChecks.length === 0 ? (degradedChecks.length > 0 ? 'DOMAIN_READY_DEGRADED' : 'DOMAIN_READY') : 'DOMAIN_NOT_READY',
     checks,
     remediation: failingChecks.map((check) => check.remediation).filter(Boolean),
     checkedAt: new Date().toISOString(),
