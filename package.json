@@ -1,4 +1,12 @@
 {
+  "name": "studious-octo-rotary-phone",
+  "version": "1.0.0",
+  "description": "DKIM service for misfits.ai Mail",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "test": "node test/bounce.test.js && node test/dane.test.js && node test/tls_rpt.test.js"
+  },
   "dependencies": {
     "dotenv": "^16.4.5",
     "express": "^4.21.0",
