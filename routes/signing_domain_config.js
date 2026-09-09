@@ -7,17 +7,124 @@ const registerSigningDomainConfigRoutes = ({
   readPrivateKeyFromPath,
   secureConfigToken,
 }) => {
+  // --- Scope definitions ---
+  // read:  export config (without private key)
+  // write: import config (mutates runtime state)
+  // admin: export with private key (most privileged)
+  const SCOPE_READ = 'read';
+  const SCOPE_WRITE = 'write';
+  const SCOPE_ADMIN = 'admin';
+
+  // --- Brute-force protection: simple in-memory sliding window ---
+  const RATE_LIMIT_WINDOW_MS = 60_000;
+  const RATE_LIMIT_MAX_ATTEMPTS = 10;
+  const failedAttempts = [];
+
+  const isRateLimited = () => {
+    const now = Date.now();
+    // Purge expired entries
+    while (failedAttempts.length > 0 && failedAttempts[0] < now - RATE_LIMIT_WINDOW_MS) {
+      failedAttempts.shift();
+    }
+    return failedAttempts.length >= RATE_LIMIT_MAX_ATTEMPTS;
+  };
+
+  const recordFailedAttempt = () => {
+    failedAttempts.push(Date.now());
+  };
+
+  // --- Auth: Bearer-only, no query/body token fallback ---
+  const extractBearerToken = (req) => {
+    const authHeader = String(req.get('authorization') || '');
+    if (!authHeader.startsWith('Bearer ')) {
+      return null;
+    }
+    return authHeader.slice(7).trim();
+  };
+
+  const resolveRequiredScope = (method, path, secureFlag) => {
+    if (path === '/signing-domain-config/export' && method === 'GET') {
+      return secureFlag ? SCOPE_ADMIN : SCOPE_READ;
+    }
+    if (path === '/signing-domain-config/import' && method === 'POST') {
+      return secureFlag ? SCOPE_ADMIN : SCOPE_WRITE;
+    }
+    return null;
+  };
+
   const hasSecureAccess = (req) => {
     if (!secureConfigToken) {
       return false;
     }
-    const authHeader = String(req.get('authorization') || '');
-    const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
-    const bodyToken = req.body && typeof req.body.token === 'string' ? req.body.token.trim() : '';
-    const queryToken = typeof req.query.token === 'string' ? req.query.token.trim() : '';
-    return bearer === secureConfigToken || bodyToken === secureConfigToken || queryToken === secureConfigToken;
+    const bearer = extractBearerToken(req);
+    return bearer === secureConfigToken;
   };
 
+  const authenticate = (req, res, requiredScope) => {
+    if (isRateLimited()) {
+      console.warn('[AUDIT] auth_rate_limited', JSON.stringify({
+        path: req.path,
+        ip: req.ip,
+        reason: 'too_many_failed_attempts',
+      }));
+      res.status(429).json({
+        status: 'error',
+        code: 'RATE_LIMITED',
+        message: 'Too many failed authentication attempts. Retry later.',
+      });
+      return false;
+    }
+
+    if (!secureConfigToken) {
+      console.error('[AUDIT] auth_misconfigured', JSON.stringify({
+        path: req.path,
+        reason: 'no_secure_config_token_configured',
+      }));
+      res.status(500).json({
+        status: 'error',
+        code: 'MISCONFIGURED',
+        message: 'Secure config token is not configured on the server.',
+      });
+      return false;
+    }
+
+    const bearer = extractBearerToken(req);
+    if (!bearer) {
+      recordFailedAttempt();
+      console.warn('[AUDIT] auth_denied', JSON.stringify({
+        path: req.path,
+        ip: req.ip,
+        reason: 'missing_bearer_token',
+        requiredScope,
+      }));
+      res.status(401).json({
+        status: 'error',
+        code: 'AUTH_REQUIRED',
+        message: 'Authorization: Bearer <token> header is required.',
+      });
+      return false;
+    }
+
+    if (bearer !== secureConfigToken) {
+      recordFailedAttempt();
+      console.warn('[AUDIT] auth_denied', JSON.stringify({
+        path: req.path,
+        ip: req.ip,
+        reason: 'invalid_token',
+        requiredScope,
+      }));
+      res.status(403).json({
+        status: 'error',
+        code: 'FORBIDDEN',
+        message: 'Invalid or revoked token.',
+      });
+      return false;
+    }
+
+    return true;
+  };
+
+  // --- Payload validation ---
   const validateImportPayload = (payload) => {
     if (!payload || typeof payload !== 'object') {
       return { ok: false, error: 'Payload must be a JSON object' };
@@ -60,9 +167,20 @@ const registerSigningDomainConfigRoutes = ({
     return diff;
   };
 
+  // --- Routes ---
+
   app.get('/signing-domain-config/export', (req, res) => {
-    const runtimeConfig = getRuntimeConfig();
     const secure = String(req.query.secure || '').toLowerCase() === 'true';
+    const requiredScope = resolveRequiredScope('GET', '/signing-domain-config/export', secure);
+
+    // Any export requires at least read scope; secure export requires admin scope
+    if (secure) {
+      if (!authenticate(req, res, requiredScope)) {
+        return;
+      }
+    }
+
+    const runtimeConfig = getRuntimeConfig();
     const allowPrivateKey = secure && hasSecureAccess(req);
 
     const bundle = {
@@ -85,6 +203,14 @@ const registerSigningDomainConfigRoutes = ({
   });
 
   app.post('/signing-domain-config/import', (req, res) => {
+    const secure = req.body && req.body.secure === true;
+    const requiredScope = resolveRequiredScope('POST', '/signing-domain-config/import', secure);
+
+    // Import always requires authentication (write scope minimum)
+    if (!authenticate(req, res, requiredScope)) {
+      return;
+    }
+
     const validation = validateImportPayload(req.body);
     if (!validation.ok) {
       return res.status(400).json({ status: 'error', message: validation.error });
@@ -92,8 +218,7 @@ const registerSigningDomainConfigRoutes = ({
 
     const runtimeConfig = getRuntimeConfig();
     const dryRun = req.body.dryRun !== false;
-    const secure = req.body.secure === true;
-    const allowPrivateKey = secure && hasSecureAccess(req);
+    const allowPrivateKey = secure;
 
     const importedConfig = {
       schemaVersion: 'v1',
@@ -126,6 +251,14 @@ const registerSigningDomainConfigRoutes = ({
     } else {
       setPrivateKey(readPrivateKeyFromPath(importedConfig.privateKeyPath));
     }
+
+    console.log('[AUDIT] config_imported', JSON.stringify({
+      domainName: importedConfig.domainName,
+      keySelector: importedConfig.keySelector,
+      dkimDomains: importedConfig.dkimDomains,
+      secure,
+      diff,
+    }));
 
     return res.status(200).json({
       status: 'ok',

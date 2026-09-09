@@ -5,7 +5,7 @@
   "main": "app.js",
   "scripts": {
     "start": "node app.js",
-    "test": "node test/bounce.test.js && node test/dane.test.js && node test/tls_rpt.test.js"
+    "test": "node test/bounce.test.js && node test/dane.test.js && node test/tls_rpt.test.js && node test/signer_auth.test.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
