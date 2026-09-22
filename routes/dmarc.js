@@ -211,7 +211,7 @@ const dmarcReports = [];
  */
 function registerDmarcRoutes(app) {
   // POST /api/v1/dmarc/reports - Import DMARC aggregate report
-  app.post('/api/v1/dmarc/reports', express.json({ limit: '10mb' }), (req, res) => {
+  app.post('/api/v1/dmarc/reports', (req, res) => {
     const { xml } = req.body;
 
     if (!xml) {
