@@ -32,6 +32,16 @@ jobs:
       - name: Check syntax
         run: node --check app.js
 
+      - name: Verify all production dependencies resolve (issue #609)
+        run: |
+          node -e "
+            const pkg = require('./package.json');
+            const deps = Object.keys(pkg.dependencies || {});
+            const missing = deps.filter(d => { try { require.resolve(d); } catch { return true; } });
+            if (missing.length) { console.error('Missing:', missing); process.exit(1); }
+            console.log('All', deps.length, 'production dependencies OK');
+          "
+
   # ============================================================
   # JOB 2 : Build & Push DKIM image via Docker Buildx to SCW Registry
   # ============================================================

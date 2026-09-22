@@ -37,6 +37,25 @@ const fs = require('fs');
 const path = require('path');
 const nodemailer = require('nodemailer');
 const dns = require('dns').promises;
+
+// Pre-flight dependency check (issue #609): fail fast with clear message
+// instead of opaque crash loop when a production dependency is missing.
+const REQUIRED_MODULES = ['xml-js'];
+const missingModules = [];
+for (const mod of REQUIRED_MODULES) {
+  try {
+    require.resolve(mod);
+  } catch {
+    missingModules.push(mod);
+  }
+}
+if (missingModules.length > 0) {
+  console.error(`[FATAL] Missing production dependencies: ${missingModules.join(', ')}`);
+  console.error('[FATAL] Fix: run `npm ci` (or `npm install`) in the service directory and redeploy.');
+  console.error('[FATAL] See issue #609: DKIM service crash loop due to missing xml-js module.');
+  process.exit(1);
+}
+
 const { registerDomainDeactivationRoute } = require('./routes/domain_deactivation');
 const { registerSigningDomainConfigRoutes } = require('./routes/signing_domain_config');
 const { registerMtaStsRoutes } = require('./routes/mta_sts');
