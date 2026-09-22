@@ -508,7 +508,13 @@ let runtimeConfig = {
   privateKeyPath: process.env.PRIVATE_KEY_PATH,
 };
 
-let privateKey = readPrivateKeyFromPath(runtimeConfig.privateKeyPath);
+let privateKey = null;
+try {
+  privateKey = readPrivateKeyFromPath(runtimeConfig.privateKeyPath);
+} catch (err) {
+  console.warn(`[DKIM] Private key not found at ${runtimeConfig.privateKeyPath}: ${err.message}`);
+  console.warn('[DKIM] Service starting in DKIM-signing disabled mode. Key file required for signing.');
+}
 
 const secureConfigToken = process.env.CONFIG_EXPORT_IMPORT_TOKEN || process.env.ADMIN_TOKEN || '';
 
