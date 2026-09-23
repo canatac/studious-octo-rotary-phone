@@ -62,6 +62,7 @@ const { registerMtaStsRoutes } = require('./routes/mta_sts');
 const { registerDmarcRoutes } = require('./routes/dmarc');
 const tlsRptRoutes = require('./routes/tls_rpt');
 const { registerBounceRoutes } = require('./routes/bounce');
+const { registerDkim2Routes } = require('./routes/dkim2');
 
 // Load environment variables
 dotenv.config();
@@ -572,6 +573,9 @@ registerDmarcRoutes(app);
 // Bounce classification and handling (issue #46)
 registerBounceRoutes(app);
 
+// DKIM2 signature support (issue #63)
+registerDkim2Routes(app);
+
 /**
  * Route to generate DKIM signature and send email
  * @route POST /generate-dkim
@@ -897,4 +901,5 @@ module.exports = {
   buildDeactivationImpact,
   deactivatedDomains,
   DEACTIVATION_CONFIRMATION_TOKEN,
+  registerDkim2Routes,
 };
