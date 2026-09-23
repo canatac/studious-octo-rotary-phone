@@ -63,6 +63,7 @@ const { registerDmarcRoutes } = require('./routes/dmarc');
 const tlsRptRoutes = require('./routes/tls_rpt');
 const { registerBounceRoutes } = require('./routes/bounce');
 const { registerDkim2Routes } = require('./routes/dkim2');
+const { poolManager } = require('./routes/smtp_pool');
 
 // Load environment variables
 dotenv.config();
@@ -650,25 +651,7 @@ app.post('/generate-dkim', async (req, res) => {
 
   console.log(`DKIM sign: from=${fromDomain} d=${signingDomain} s=${runtimeConfig.keySelector}`);
 
-  // Create a transporter with DKIM configuration
-  const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: parseInt(process.env.SMTP_PORT, 10),
-    secure: process.env.SMTP_SECURE === 'true',
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS
-    },
-    tls: {
-      rejectUnauthorized: false
-    },
-    dkim: {
-      domainName: signingDomain,
-      keySelector: runtimeConfig.keySelector,
-      privateKey: privateKey
-    }
-  });
-
+  // Normalize attachments
   const normalizedAttachments = Array.isArray(attachments)
     ? attachments
         .filter((att) => att && typeof att.filename === 'string' && typeof att.dataBase64 === 'string' && att.dataBase64.trim().length > 0)
@@ -691,9 +674,25 @@ app.post('/generate-dkim', async (req, res) => {
     attachments: normalizedAttachments,
   };
 
+  // DKIM config for pooled connections
+  const dkimConfig = {
+    domainName: signingDomain,
+    keySelector: runtimeConfig.keySelector,
+    privateKey: privateKey,
+  };
+
+  const poolOptions = {
+    host: process.env.SMTP_HOST,
+    port: parseInt(process.env.SMTP_PORT, 10),
+    secure: process.env.SMTP_SECURE === 'true',
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS,
+    dkim: dkimConfig,
+  };
+
   try {
-    // Send mail with defined transport object
-    const info = await transporter.sendMail(mailOptions);
+    // Send mail via connection pool (issue #39)
+    const info = await poolManager.sendMail(fromDomain, mailOptions, poolOptions);
     console.log('Message sent: %s', info.messageId);
 
     const accepted = Array.isArray(info.accepted) ? info.accepted : [];
@@ -884,6 +883,12 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok', message: 'Service is running' });
 });
 
+// SMTP pool metrics endpoint (issue #39)
+app.get('/metrics/smtp-pool', (req, res) => {
+  const poolMetrics = poolManager.getAllMetrics();
+  res.status(200).json(poolMetrics);
+});
+
 // Start the server
 const PORT = process.env.PORT || 3000;
 if (require.main === module) {
@@ -902,4 +907,5 @@ module.exports = {
   deactivatedDomains,
   DEACTIVATION_CONFIRMATION_TOKEN,
   registerDkim2Routes,
+  poolManager,
 };
