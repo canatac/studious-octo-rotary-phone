@@ -64,6 +64,7 @@ const tlsRptRoutes = require('./routes/tls_rpt');
 const { registerBounceRoutes } = require('./routes/bounce');
 const { registerDkim2Routes } = require('./routes/dkim2');
 const { poolManager } = require('./routes/smtp_pool');
+const { registerAliasRoutes, resolveAliasRecipient, recordAliasForward } = require('./routes/alias');
 
 // Load environment variables
 dotenv.config();
@@ -577,6 +578,9 @@ registerBounceRoutes(app);
 // DKIM2 signature support (issue #63)
 registerDkim2Routes(app);
 
+// Masked email alias management API (issue #54)
+registerAliasRoutes(app);
+
 /**
  * Route to generate DKIM signature and send email
  * @route POST /generate-dkim
@@ -908,4 +912,6 @@ module.exports = {
   DEACTIVATION_CONFIRMATION_TOKEN,
   registerDkim2Routes,
   poolManager,
+  resolveAliasRecipient,
+  recordAliasForward,
 };
