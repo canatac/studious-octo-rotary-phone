@@ -38,8 +38,10 @@ const path = require('path');
 const nodemailer = require('nodemailer');
 const dns = require('dns').promises;
 
-// Pre-flight dependency check (issue #609): fail fast with clear message
-// instead of opaque crash loop when a production dependency is missing.
+// Pre-flight dependency check (issue #609, #718): detect missing modules
+// and start in degraded mode instead of crash-looping.
+// process.exit(1) + Docker restart:always = infinite crash loop.
+// Instead, set a flag and let the health endpoint report the issue.
 const REQUIRED_MODULES = ['xml-js'];
 const missingModules = [];
 for (const mod of REQUIRED_MODULES) {
@@ -49,11 +51,12 @@ for (const mod of REQUIRED_MODULES) {
     missingModules.push(mod);
   }
 }
-if (missingModules.length > 0) {
-  console.error(`[FATAL] Missing production dependencies: ${missingModules.join(', ')}`);
-  console.error('[FATAL] Fix: run `npm ci` (or `npm install`) in the service directory and redeploy.');
-  console.error('[FATAL] See issue #609: DKIM service crash loop due to missing xml-js module.');
-  process.exit(1);
+const degradedMode = missingModules.length > 0;
+if (degradedMode) {
+  console.error(`[WARN] Missing production dependencies: ${missingModules.join(', ')}`);
+  console.error('[WARN] Service starting in DEGRADED mode. DMARC report parsing unavailable.');
+  console.error('[WARN] Fix: run `npm ci` (or `npm install`) in the service directory and redeploy.');
+  console.error('[WARN] See issue #718: DKIM service stability — crash loop fix.');
 }
 
 const { registerDomainDeactivationRoute } = require('./routes/domain_deactivation');
@@ -884,7 +887,29 @@ app.get('/diagnostics/signer', async (req, res) => {
  * @returns {void}
  */
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'ok', message: 'Service is running' });
+  if (degradedMode) {
+    res.status(503).json({
+      status: 'degraded',
+      message: 'Service running with missing dependencies',
+      missingModules,
+      capabilities: {
+        dkim_signing: false,
+        dmarc_parsing: false,
+        smtp_send: false,
+      },
+      remediation: 'Run `npm ci` in the service directory and redeploy.',
+    });
+    return;
+  }
+  res.status(200).json({
+    status: 'ok',
+    message: 'Service is running',
+    capabilities: {
+      dkim_signing: true,
+      dmarc_parsing: true,
+      smtp_send: true,
+    },
+  });
 });
 
 // SMTP pool metrics endpoint (issue #39)
@@ -914,4 +939,6 @@ module.exports = {
   poolManager,
   resolveAliasRecipient,
   recordAliasForward,
+  degradedMode,
+  missingModules,
 };
